@@ -1,0 +1,26 @@
+name: Audit
+
+# A new advisory against a dependency does not wait for someone to push, so this also runs on a
+# schedule. It fails on a vulnerability; an "unmaintained crate" notice is reported but does not
+# turn the build red, because that is a thing to plan around rather than an outage.
+on:
+  push:
+    paths: ["**/Cargo.toml", "**/Cargo.lock", ".github/workflows/audit.yml"]
+  pull_request:
+    paths: ["**/Cargo.toml", "**/Cargo.lock"]
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit the dependency tree
+        run: cargo audit
