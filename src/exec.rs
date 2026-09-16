@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 
 use crate::reference::{self, Reference};
 use crate::resolve::Resolver;
-use crate::{dotenv, template, Error, Result};
+use crate::{dotenv, keyring, template, Error, Result};
 
 /// What to run and what to give it.
 #[derive(Debug, Default, Clone)]
@@ -33,7 +33,8 @@ pub struct ExecOptions {
 /// Split a `--template SRC:DST` argument.
 ///
 /// A Windows drive letter is not a separator, so `C:\in.tmpl:C:\out.ini` splits where a human
-/// would split it.
+/// would split it. The exception is Windows-only: on unix a single-letter file name is an ordinary
+/// file name, and `a:/run/app.ini` must split after the `a`.
 pub fn split_template_spec(spec: &str) -> Result<(PathBuf, PathBuf)> {
     let bytes = spec.as_bytes();
     let mut index = 0usize;
@@ -54,10 +55,17 @@ pub fn split_template_spec(spec: &str) -> Result<(PathBuf, PathBuf)> {
 }
 
 fn is_drive_colon(bytes: &[u8], index: usize) -> bool {
-    index == 1 && bytes[0].is_ascii_alphabetic() && matches!(bytes.get(2), Some(b'\\') | Some(b'/'))
+    cfg!(windows)
+        && index == 1
+        && bytes[0].is_ascii_alphabetic()
+        && matches!(bytes.get(2), Some(b'\\') | Some(b'/'))
 }
 
 /// Layer the inherited environment and the env files, then resolve every `seal:` value.
+///
+/// The keyring variables are dropped from the result. The keyring itself is read straight from
+/// this process's own environment when a `seal:v1` reference needs it, so removing them here
+/// keeps the master key out of the application without affecting resolution.
 pub fn build_env(
     env_files: &[PathBuf],
     resolver: &mut Resolver,
@@ -69,6 +77,9 @@ pub fn build_env(
         for entry in dotenv::parse_file(path)? {
             env.insert(entry.key, Zeroizing::new(entry.value));
         }
+    }
+    for name in keyring::KEY_SOURCE_VARS {
+        env.remove(*name);
     }
     for (name, value) in env.iter_mut() {
         if !reference::is_reference(value) {
@@ -170,11 +181,21 @@ mod tests {
         assert_eq!(dst, PathBuf::from("/run/sealref/config.ini"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn splits_a_spec_with_windows_drive_letters() {
         let (src, dst) = split_template_spec(r"C:\in\app.tmpl:D:\out\app.ini").unwrap();
         assert_eq!(src, PathBuf::from(r"C:\in\app.tmpl"));
         assert_eq!(dst, PathBuf::from(r"D:\out\app.ini"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_one_letter_source_name_is_not_a_drive_letter_on_unix() {
+        // `a` is an ordinary file name here, so the first colon really is the separator.
+        let (src, dst) = split_template_spec("a:/run/sealref/app.ini").unwrap();
+        assert_eq!(src, PathBuf::from("a"));
+        assert_eq!(dst, PathBuf::from("/run/sealref/app.ini"));
     }
 
     #[test]

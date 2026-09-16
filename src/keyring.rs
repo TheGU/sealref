@@ -27,6 +27,13 @@ use crate::{Error, Result};
 /// Read when `SEALREF_KEY_FILE` is unset and this path exists.
 pub const DEFAULT_KEY_FILE: &str = "/run/secrets/sealref_key";
 
+/// The environment variables that can carry a keyring into this process.
+///
+/// `exec` strips these from the environment it hands to the application. A master key that opens
+/// every sealed value is a larger prize than the one password the application asked for, and no
+/// application has a reason to read it.
+pub const KEY_SOURCE_VARS: &[&str] = &["SEALREF_KEY", "SEALREF_KEY_FILE", "SEALREF_KEY_FD"];
+
 /// Argon2id memory cost, in KiB (64 MiB).
 pub const ARGON2_MEMORY_KIB: u32 = 65_536;
 

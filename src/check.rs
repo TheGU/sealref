@@ -109,6 +109,8 @@ impl Checker {
             return match Reference::parse(value) {
                 Ok(Reference::V1(r)) => Finding::ok(name, &format!("sealed kid={}", r.kid)),
                 Ok(Reference::Vault(r)) => Finding::ok(name, &format!("vault {}", r.locator())),
+                Ok(Reference::Conjur(r)) => Finding::ok(name, &format!("conjur {}", r.locator())),
+                Ok(Reference::Ccp(r)) => Finding::ok(name, &format!("ccp {}", r.locator())),
                 Err(e) => Finding::fail(name, &format!("invalid reference: {e}")),
             };
         }
@@ -204,6 +206,18 @@ mod tests {
         let finding =
             checker(false).check_value("SMTP_PASSWORD", "seal:vault:secret/smtp#password");
         assert_eq!(finding.line, "OK SMTP_PASSWORD vault secret/smtp#password");
+    }
+
+    #[test]
+    fn reports_a_conjur_value_by_variable_id() {
+        let finding = checker(false).check_value("DB_PASSWORD", "seal:conjur:prod/db/password");
+        assert_eq!(finding.line, "OK DB_PASSWORD conjur prod/db/password");
+    }
+
+    #[test]
+    fn reports_a_ccp_value_by_locator() {
+        let finding = checker(false).check_value("DB_PASSWORD", "seal:ccp:MySafe/pg-main#Content");
+        assert_eq!(finding.line, "OK DB_PASSWORD ccp MySafe/pg-main#Content");
     }
 
     #[test]

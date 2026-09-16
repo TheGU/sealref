@@ -6,15 +6,13 @@
 //! second Vault CLI.
 
 use std::fs;
-use std::time::Duration;
 
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
+use crate::http;
 use crate::reference::VaultRef;
 use crate::{Error, Result};
-
-const TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Vault connection settings, read from the standard environment variables.
 pub struct VaultConfig {
@@ -66,7 +64,7 @@ impl VaultConfig {
             }
         };
         Ok(VaultConfig {
-            addr: addr.trim_end_matches('/').to_string(),
+            addr: http::normalise_base_url(&addr),
             namespace,
             token,
         })
@@ -74,34 +72,36 @@ impl VaultConfig {
 
     /// The KV v2 data URL for a mount and path.
     pub fn data_url(&self, mount: &str, path: &str) -> String {
-        format!("{}/v1/{}/data/{}", self.addr, mount, path)
+        format!(
+            "{}/v1/{}/data/{}",
+            self.addr,
+            http::percent_encode(mount),
+            http::percent_encode_path(path)
+        )
     }
 
     /// Read one field of one KV v2 secret.
     pub fn read_field(&self, reference: &VaultRef) -> Result<Zeroizing<String>> {
         let url = self.data_url(&reference.mount, &reference.path);
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(TIMEOUT)
-            .timeout_read(TIMEOUT)
-            .build();
-        let mut request = agent.get(&url).set("X-Vault-Token", &self.token);
+        let mut request = http::agent()?.get(&url).set("X-Vault-Token", &self.token);
         if let Some(namespace) = &self.namespace {
             request = request.set("X-Vault-Namespace", namespace);
         }
-        let response = match request.call() {
+        let response = match http::check(request.call()) {
             Ok(response) => response,
             // Vault error bodies name paths and policies, never the secret, but the safe habit is
             // to report the status and the locator and nothing else.
-            Err(ureq::Error::Status(code, _)) => {
+            Err(http::Failure::Status { code, .. }) => {
                 return Err(Error::Vault(format!(
-                    "{} returned HTTP {code} for {}",
+                    "{} returned HTTP {code} for {}{}",
                     self.addr,
-                    reference.locator()
+                    reference.locator(),
+                    http::redirect_note(code)
                 )))
             }
-            Err(e) => {
+            Err(http::Failure::Transport(reason)) => {
                 return Err(Error::Vault(format!(
-                    "cannot reach {} for {}: {e}",
+                    "cannot reach {} for {}: {reason}",
                     self.addr,
                     reference.locator()
                 )))

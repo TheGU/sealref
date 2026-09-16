@@ -226,7 +226,7 @@ mod tests {
         let text = text.as_str();
         let rendered = render(text, |r, _| match r {
             Reference::V1(_) => Ok(Zeroizing::new("first".to_string())),
-            Reference::Vault(_) => Ok(Zeroizing::new("second".to_string())),
+            _ => Ok(Zeroizing::new("second".to_string())),
         })
         .unwrap();
         assert_eq!(

@@ -6,6 +6,8 @@
 
 use zeroize::Zeroizing;
 
+use crate::ccp::CcpConfig;
+use crate::conjur::ConjurConfig;
 use crate::keyring::{self, Keyring};
 use crate::reference::Reference;
 use crate::vault::VaultConfig;
@@ -16,6 +18,8 @@ use crate::{Error, Result};
 pub struct Resolver {
     keyring: Option<Keyring>,
     vault: Option<VaultConfig>,
+    conjur: Option<ConjurConfig>,
+    ccp: Option<CcpConfig>,
 }
 
 impl Resolver {
@@ -28,7 +32,7 @@ impl Resolver {
     pub fn with_keyring(keyring: Keyring) -> Self {
         Resolver {
             keyring: Some(keyring),
-            vault: None,
+            ..Self::default()
         }
     }
 
@@ -47,6 +51,20 @@ impl Resolver {
         Ok(self.vault.as_ref().expect("vault config was just loaded"))
     }
 
+    fn conjur(&mut self) -> Result<&ConjurConfig> {
+        if self.conjur.is_none() {
+            self.conjur = Some(ConjurConfig::from_env()?);
+        }
+        Ok(self.conjur.as_ref().expect("conjur config was just loaded"))
+    }
+
+    fn ccp(&mut self) -> Result<&CcpConfig> {
+        if self.ccp.is_none() {
+            self.ccp = Some(CcpConfig::from_env()?);
+        }
+        Ok(self.ccp.as_ref().expect("ccp config was just loaded"))
+    }
+
     /// Resolve a parsed reference through its provider.
     pub fn resolve(&mut self, reference: &Reference) -> Result<Zeroizing<String>> {
         match reference {
@@ -55,6 +73,8 @@ impl Resolver {
                 crate::crypto::open_string(key.bytes(), &r.kid, &r.blob)
             }
             Reference::Vault(r) => self.vault()?.read_field(r),
+            Reference::Conjur(r) => self.conjur()?.read_variable(r),
+            Reference::Ccp(r) => self.ccp()?.read_field(r),
         }
     }
 
@@ -62,10 +82,10 @@ impl Resolver {
     pub fn unseal(&mut self, reference: &Reference) -> Result<Zeroizing<String>> {
         match reference {
             Reference::V1(_) => self.resolve(reference),
-            Reference::Vault(_) => Err(Error::Msg(
-                "unseal handles seal:v1 references only: use \"sealref resolve\" for seal:vault"
-                    .to_string(),
-            )),
+            remote => Err(Error::Msg(format!(
+                "unseal handles seal:v1 references only: use \"sealref resolve\" for seal:{}",
+                remote.provider()
+            ))),
         }
     }
 

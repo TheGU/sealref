@@ -1,10 +1,12 @@
 //! Parsing and formatting of `seal:` references.
 //!
-//! Two shapes exist in v0.1:
+//! Four shapes exist:
 //!
 //! ```text
 //! seal:v1:<kid>:<base64url-no-pad(nonce || ciphertext || tag)>
 //! seal:vault:<mount>/<path>#<field>
+//! seal:conjur:<variable-id>
+//! seal:ccp:<safe>/<object>#<field>
 //! ```
 //!
 //! Anything else that starts with `seal:` is an error. Anything that does not start with `seal:`
@@ -73,11 +75,47 @@ impl VaultRef {
     }
 }
 
+/// A CyberArk Conjur variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConjurRef {
+    /// The variable id, for example `prod/db/password`. The Conjur account and appliance URL are
+    /// deployment facts and live in the environment, not in the reference.
+    pub id: String,
+}
+
+impl ConjurRef {
+    /// The variable id, safe to print: it names a location, not a secret.
+    pub fn locator(&self) -> String {
+        self.id.clone()
+    }
+}
+
+/// A CyberArk Central Credential Provider account lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CcpRef {
+    /// The safe holding the account.
+    pub safe: String,
+    /// The object name of the account inside the safe.
+    pub object: String,
+    /// The account property to read. The password is the property named `Content`.
+    pub field: String,
+}
+
+impl CcpRef {
+    /// `<safe>/<object>#<field>`, safe to print. The application id is deliberately not part of
+    /// it, so it cannot reach a log through an error message.
+    pub fn locator(&self) -> String {
+        format!("{}/{}#{}", self.safe, self.object, self.field)
+    }
+}
+
 /// A parsed `seal:` reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reference {
     V1(V1Ref),
     Vault(VaultRef),
+    Conjur(ConjurRef),
+    Ccp(CcpRef),
 }
 
 impl Reference {
@@ -91,8 +129,15 @@ impl Reference {
         match provider {
             "v1" => Ok(Reference::V1(parse_v1(body)?)),
             "vault" => Ok(Reference::Vault(parse_vault(body)?)),
+            "conjur" => Ok(Reference::Conjur(parse_conjur(body)?)),
+            "ccp" => Ok(Reference::Ccp(parse_ccp(body)?)),
             other => Err(Error::UnknownProvider(other.to_string())),
         }
+    }
+
+    /// True when resolving this reference needs the network.
+    pub fn is_remote(&self) -> bool {
+        !matches!(self, Reference::V1(_))
     }
 
     /// The provider name, for diagnostics.
@@ -100,6 +145,8 @@ impl Reference {
         match self {
             Reference::V1(_) => "v1",
             Reference::Vault(_) => "vault",
+            Reference::Conjur(_) => "conjur",
+            Reference::Ccp(_) => "ccp",
         }
     }
 }
@@ -159,6 +206,84 @@ fn parse_vault(body: &str) -> Result<VaultRef> {
     Ok(VaultRef {
         mount: mount.to_string(),
         path: path.to_string(),
+        field: field.to_string(),
+    })
+}
+
+/// Characters the CyberArk Central Credential Provider cannot carry in a URL value.
+///
+/// `+` decodes to a space, `&` ends the parameter, and `%` starts an escape. CyberArk documents
+/// all three as unsupported, so a reference that contains one is rejected at parse time rather
+/// than producing a lookup that silently reads the wrong account.
+const CCP_FORBIDDEN: &[char] = &['+', '&', '%'];
+
+fn parse_conjur(body: &str) -> Result<ConjurRef> {
+    let malformed = |reason: &str| Error::Malformed {
+        kind: "seal:conjur",
+        reason: reason.to_string(),
+    };
+    if body.is_empty() {
+        return Err(malformed("the variable id is empty"));
+    }
+    if body.chars().any(char::is_whitespace) {
+        return Err(malformed("the variable id contains whitespace"));
+    }
+    if body.contains('#') {
+        return Err(malformed(
+            "a Conjur variable holds one value, so it takes no \"#field\"",
+        ));
+    }
+    if body.starts_with('/') || body.ends_with('/') || body.contains("//") {
+        return Err(malformed("the variable id has an empty path segment"));
+    }
+    Ok(ConjurRef {
+        id: body.to_string(),
+    })
+}
+
+fn parse_ccp(body: &str) -> Result<CcpRef> {
+    let malformed = |reason: &str| Error::Malformed {
+        kind: "seal:ccp",
+        reason: reason.to_string(),
+    };
+    let (locator, field) = body
+        .split_once('#')
+        .ok_or_else(|| malformed("expected seal:ccp:<safe>/<object>#<field>"))?;
+    if field.is_empty() {
+        return Err(malformed("the property name is empty"));
+    }
+    if field.contains('#') {
+        return Err(malformed("the property name must not contain \"#\""));
+    }
+    let (safe, object) = locator
+        .split_once('/')
+        .ok_or_else(|| malformed("expected a safe and an object separated by \"/\""))?;
+    if safe.is_empty() {
+        return Err(malformed("the safe is empty"));
+    }
+    if object.is_empty() {
+        return Err(malformed("the object is empty"));
+    }
+    if object.contains('/') {
+        return Err(malformed(
+            "the object name must not contain \"/\": subfolders are out of scope",
+        ));
+    }
+    for (name, value) in [("safe", safe), ("object", object), ("property", field)] {
+        if value.chars().any(char::is_whitespace) && value.trim() != value {
+            return Err(malformed(&format!(
+                "the {name} has leading or trailing whitespace"
+            )));
+        }
+        if let Some(bad) = value.chars().find(|c| CCP_FORBIDDEN.contains(c)) {
+            return Err(malformed(&format!(
+                "the {name} contains \"{bad}\", which CyberArk cannot carry in a URL value"
+            )));
+        }
+    }
+    Ok(CcpRef {
+        safe: safe.to_string(),
+        object: object.to_string(),
         field: field.to_string(),
     })
 }
@@ -261,6 +386,92 @@ mod tests {
                 Reference::parse(bad).is_err(),
                 "expected {bad} to be rejected"
             );
+        }
+    }
+
+    #[test]
+    fn parses_a_conjur_reference() {
+        match Reference::parse("seal:conjur:prod/db/password").unwrap() {
+            Reference::Conjur(c) => {
+                assert_eq!(c.id, "prod/db/password");
+                assert_eq!(c.locator(), "prod/db/password");
+            }
+            other => panic!("expected a conjur reference, got {other:?}"),
+        }
+        assert!(Reference::parse("seal:conjur:single").is_ok());
+    }
+
+    #[test]
+    fn rejects_malformed_conjur_references() {
+        for bad in [
+            "seal:conjur:",
+            "seal:conjur:has space",
+            "seal:conjur:prod/db#password",
+            "seal:conjur:/leading",
+            "seal:conjur:trailing/",
+            "seal:conjur:double//slash",
+        ] {
+            assert!(
+                Reference::parse(bad).is_err(),
+                "expected {bad} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_a_ccp_reference() {
+        match Reference::parse("seal:ccp:MySafe/MyObject#Content").unwrap() {
+            Reference::Ccp(c) => {
+                assert_eq!(c.safe, "MySafe");
+                assert_eq!(c.object, "MyObject");
+                assert_eq!(c.field, "Content");
+                assert_eq!(c.locator(), "MySafe/MyObject#Content");
+            }
+            other => panic!("expected a ccp reference, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_ccp_safe_may_contain_a_space() {
+        // Safe names with spaces are ordinary in CyberArk, and a space percent-encodes cleanly.
+        match Reference::parse("seal:ccp:Prod Databases/pg-main#Content").unwrap() {
+            Reference::Ccp(c) => assert_eq!(c.safe, "Prod Databases"),
+            other => panic!("expected a ccp reference, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_ccp_references() {
+        for bad in [
+            "seal:ccp:MySafe/MyObject",
+            "seal:ccp:MySafe#Content",
+            "seal:ccp:/MyObject#Content",
+            "seal:ccp:MySafe/#Content",
+            "seal:ccp:MySafe/MyObject#",
+            "seal:ccp:MySafe/Folder/Object#Content",
+            "seal:ccp:My&Safe/MyObject#Content",
+            "seal:ccp:MySafe/My+Object#Content",
+            "seal:ccp:MySafe/MyObject#Con%tent",
+            "seal:ccp: MySafe/MyObject#Content",
+        ] {
+            assert!(
+                Reference::parse(bad).is_err(),
+                "expected {bad} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn knows_which_references_need_the_network() {
+        assert!(!Reference::parse(&format_v1("k1", &[0u8; MIN_BLOB_LEN]))
+            .unwrap()
+            .is_remote());
+        for remote in [
+            "seal:vault:secret/app#password",
+            "seal:conjur:prod/db/password",
+            "seal:ccp:MySafe/MyObject#Content",
+        ] {
+            assert!(Reference::parse(remote).unwrap().is_remote());
         }
     }
 

@@ -3,10 +3,13 @@
 //! The library half of the `sealref` binary. Every module here is deliberately small: the whole
 //! point of the tool is that a security team can read it end to end.
 
+pub mod ccp;
 pub mod check;
+pub mod conjur;
 pub mod crypto;
 pub mod dotenv;
 pub mod exec;
+pub mod http;
 pub mod keyring;
 pub mod reference;
 pub mod resolve;
@@ -29,7 +32,9 @@ pub enum Error {
     #[error("value is not a reference: it does not start with \"seal:\"")]
     NotAReference,
 
-    #[error("unknown reference provider \"{0}\": known providers are \"v1\" and \"vault\"")]
+    #[error(
+        "unknown reference provider \"{0}\": known providers are \"v1\", \"vault\", \"conjur\"          and \"ccp\""
+    )]
     UnknownProvider(String),
 
     #[error("malformed {kind} reference: {reason}")]
@@ -84,6 +89,15 @@ pub enum Error {
 
     #[error("vault: {0}")]
     Vault(String),
+
+    #[error("conjur: {0}")]
+    Conjur(String),
+
+    #[error("ccp: {0}")]
+    Ccp(String),
+
+    #[error("tls: {0}")]
+    Tls(String),
 
     #[error("{name}: {reason}")]
     Resolution { name: String, reason: String },

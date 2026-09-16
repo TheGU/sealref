@@ -642,6 +642,64 @@ fn exec_resolves_the_inherited_environment() {
 }
 
 #[test]
+fn exec_does_not_hand_the_keyring_to_the_command() {
+    // The master key opens every sealed value, so it must not reach the application even though
+    // it reached sealref through the environment.
+    let mut command = sealref();
+    command
+        .arg("exec")
+        .arg("--")
+        .args(echo_command("SEALREF_KEY"));
+    command
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(KEY_A).not())
+        .stdout(predicate::str::contains("argon2id").not());
+}
+
+#[test]
+fn exec_does_not_hand_the_key_file_path_to_the_command() {
+    let dir = TempDir::new().unwrap();
+    let key_file = write(
+        &dir,
+        "sealref.key",
+        &format!(
+            "k1 {KEY_A}
+"
+        ),
+    );
+    let mut command = Command::cargo_bin("sealref").unwrap();
+    command
+        .env_remove("SEALREF_KEY_FD")
+        .env_remove("SEALREF_KEY")
+        .env("SEALREF_KEY_FILE", path_arg(&key_file))
+        .arg("exec")
+        .arg("--")
+        .args(echo_command("SEALREF_KEY_FILE"));
+    command
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sealref.key").not());
+}
+
+#[test]
+fn exec_still_resolves_after_the_keyring_is_stripped() {
+    // Stripping the keyring from the child environment must not break resolution, which reads the
+    // keyring from sealref's own environment.
+    let sealed = seal_value("k1", "still-resolves");
+    let mut command = sealref();
+    command
+        .env("DB_PASSWORD", &sealed)
+        .arg("exec")
+        .arg("--")
+        .args(echo_command("DB_PASSWORD"));
+    command
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("still-resolves"));
+}
+
+#[test]
 fn exec_leaves_values_that_are_not_references_untouched() {
     let mut command = sealref();
     command
