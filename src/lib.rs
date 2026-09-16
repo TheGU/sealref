@@ -32,9 +32,7 @@ pub enum Error {
     #[error("value is not a reference: it does not start with \"seal:\"")]
     NotAReference,
 
-    #[error(
-        "unknown reference provider \"{0}\": known providers are \"v1\", \"vault\", \"conjur\"          and \"ccp\""
-    )]
+    #[error("unknown reference provider \"{0}\": known providers are v1, vault, conjur and ccp")]
     UnknownProvider(String),
 
     #[error("malformed {kind} reference: {reason}")]

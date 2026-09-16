@@ -203,6 +203,11 @@ fn parse_vault(body: &str) -> Result<VaultRef> {
     if body.chars().any(char::is_whitespace) {
         return Err(malformed("reference contains whitespace"));
     }
+    if has_dot_segment(mount) || has_dot_segment(path) {
+        return Err(malformed(
+            "the path has a \".\" or \"..\" segment, which would address another location",
+        ));
+    }
     Ok(VaultRef {
         mount: mount.to_string(),
         path: path.to_string(),
@@ -216,6 +221,18 @@ fn parse_vault(body: &str) -> Result<VaultRef> {
 /// all three as unsupported, so a reference that contains one is rejected at parse time rather
 /// than producing a lookup that silently reads the wrong account.
 const CCP_FORBIDDEN: &[char] = &['+', '&', '%'];
+
+/// True when any `/`-separated segment is `.` or `..`.
+///
+/// Both are removed by URL normalisation before a request goes out, so a reference containing one
+/// does not address the location it appears to address: `seal:conjur:../../other/variable/x` would
+/// read a different account, and `seal:vault:secret/../../sys/seal-status#x` would leave the KV
+/// mount entirely, in both cases carrying the run's token. The reference file is the artefact this
+/// tool asks you to commit and review in a diff, so it must mean what it reads as.
+fn has_dot_segment(path: &str) -> bool {
+    path.split('/')
+        .any(|segment| segment == "." || segment == "..")
+}
 
 fn parse_conjur(body: &str) -> Result<ConjurRef> {
     let malformed = |reason: &str| Error::Malformed {
@@ -235,6 +252,11 @@ fn parse_conjur(body: &str) -> Result<ConjurRef> {
     }
     if body.starts_with('/') || body.ends_with('/') || body.contains("//") {
         return Err(malformed("the variable id has an empty path segment"));
+    }
+    if has_dot_segment(body) {
+        return Err(malformed(
+            "the variable id has a \".\" or \"..\" segment, which would address another location",
+        ));
     }
     Ok(ConjurRef {
         id: body.to_string(),
@@ -268,6 +290,9 @@ fn parse_ccp(body: &str) -> Result<CcpRef> {
         return Err(malformed(
             "the object name must not contain \"/\": subfolders are out of scope",
         ));
+    }
+    if field.contains('/') {
+        return Err(malformed("the property name must not contain \"/\""));
     }
     for (name, value) in [("safe", safe), ("object", object), ("property", field)] {
         if value.trim() != value {
@@ -381,6 +406,9 @@ mod tests {
             "seal:vault:secret/path#",
             "seal:vault:secret/path#a#b",
             "seal:vault:secret/pa th#field",
+            "seal:vault:secret/../../sys/seal-status#x",
+            "seal:vault:../secret/app#password",
+            "seal:vault:secret/./app#password",
         ] {
             assert!(
                 Reference::parse(bad).is_err(),
@@ -399,6 +427,10 @@ mod tests {
             other => panic!("expected a conjur reference, got {other:?}"),
         }
         assert!(Reference::parse("seal:conjur:single").is_ok());
+        // A dot inside a segment is an ordinary character; only a whole "." or ".." segment is a
+        // traversal.
+        assert!(Reference::parse("seal:conjur:prod/db.password").is_ok());
+        assert!(Reference::parse("seal:conjur:...").is_ok());
     }
 
     #[test]
@@ -410,6 +442,10 @@ mod tests {
             "seal:conjur:/leading",
             "seal:conjur:trailing/",
             "seal:conjur:double//slash",
+            "seal:conjur:../../otheracct/variable/prod/db",
+            "seal:conjur:prod/../../../v1/sys/anything",
+            "seal:conjur:prod/./db",
+            "seal:conjur:..",
         ] {
             assert!(
                 Reference::parse(bad).is_err(),
@@ -453,6 +489,7 @@ mod tests {
             "seal:ccp:MySafe/My+Object#Content",
             "seal:ccp:MySafe/MyObject#Con%tent",
             "seal:ccp: MySafe/MyObject#Content",
+            "seal:ccp:MySafe/MyObject#a/b",
         ] {
             assert!(
                 Reference::parse(bad).is_err(),

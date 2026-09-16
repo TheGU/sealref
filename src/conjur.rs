@@ -140,10 +140,21 @@ impl ConjurConfig {
         };
         // The body IS the secret. `into_string` fails on invalid UTF-8 without quoting the bytes,
         // and no arm below may include the body or its length.
-        response
-            .into_string()
-            .map(Zeroizing::new)
-            .map_err(|_| Error::Conjur(format!("{}: the value is not valid UTF-8", reference.id)))
+        let value = Zeroizing::new(response.into_string().map_err(|_| {
+            Error::Conjur(format!(
+                "{}: the value is not valid UTF-8",
+                reference.locator()
+            ))
+        })?);
+        // A 200 with no body would otherwise resolve to an empty string and start the application
+        // with an empty password, which is the one outcome a tool that fails closed must not have.
+        if value.is_empty() {
+            return Err(Error::Conjur(format!(
+                "{}: the server returned an empty value",
+                reference.locator()
+            )));
+        }
+        Ok(value)
     }
 
     /// The access token, obtained once per run.
@@ -202,27 +213,26 @@ impl Credential {
                 &format!("{TOKEN_FILE_VAR} {path}"),
             )?));
         }
-        if let Some(token) = env_value(TOKEN_VAR) {
-            let token = Zeroizing::new(token);
+        if let Some(token) = env_secret(TOKEN_VAR) {
             return Ok(Credential::Token(normalise_token(&token, TOKEN_VAR)?));
         }
         if let Some(login) = env_value(LOGIN_VAR) {
             let key = match env_value(API_KEY_FILE_VAR) {
                 Some(path) => {
-                    let text = fs::read_to_string(&path).map_err(|e| {
+                    let text = Zeroizing::new(fs::read_to_string(&path).map_err(|e| {
                         Error::Conjur(format!("cannot read {API_KEY_FILE_VAR} {path}: {e}"))
-                    })?;
+                    })?);
                     let key = Zeroizing::new(text.trim().to_string());
                     if key.is_empty() {
                         return Err(Error::Conjur(format!("{API_KEY_FILE_VAR} {path} is empty")));
                     }
                     key
                 }
-                None => Zeroizing::new(env_value(API_KEY_VAR).ok_or_else(|| {
+                None => env_secret(API_KEY_VAR).ok_or_else(|| {
                     Error::Conjur(format!(
                         "{LOGIN_VAR} is set but neither {API_KEY_VAR} nor {API_KEY_FILE_VAR} is"
                     ))
-                })?),
+                })?,
             };
             return Ok(Credential::ApiKey { login, key });
         }
@@ -290,6 +300,16 @@ fn env_value(name: &str) -> Option<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+/// The same, for a variable that holds a credential, so every copy is cleared on drop.
+fn env_secret(name: &str) -> Option<Zeroizing<String>> {
+    let raw = Zeroizing::new(std::env::var(name).ok()?);
+    let trimmed = Zeroizing::new(raw.trim().to_string());
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed)
 }
 
 #[cfg(test)]

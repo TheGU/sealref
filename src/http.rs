@@ -27,8 +27,11 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 
 use crate::{Error, Result};
 
-/// Connect and per-read timeout for every provider request.
+/// Connect, read and write timeout for every provider request.
 pub const TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Deadline for a whole request, however slowly it is being fed.
+pub const DEADLINE: Duration = Duration::from_secs(60);
 
 /// PEM roots that replace the built-in Mozilla bundle.
 pub const CA_FILE_VAR: &str = "SEALREF_CA_FILE";
@@ -44,7 +47,9 @@ pub const CLIENT_KEY_VAR: &str = "SEALREF_CLIENT_KEY";
 /// Every one of these configures TLS for some other client of the same server, and an operator who
 /// sets one has every reason to assume SealRef obeys it. Silently ignoring a variable whose whole
 /// purpose is to narrow trust is the worst available outcome, so the first time an agent is built
-/// SealRef says on stderr that it is not reading them. It is a notice rather than a failure: these
+/// SealRef says on stderr that it is not reading them, whether or not `SEALREF_CA_FILE` is also
+/// set: `VAULT_SKIP_VERIFY` in particular is not answered by setting a CA file, and an operator
+/// who set it believes verification is off. It is a notice rather than a failure, because these
 /// variables belong to Vault Agent and to the Conjur clients that legitimately share the
 /// environment, and refusing to start because a neighbour is configured would be wrong.
 pub const IGNORED_TLS_VARS: &[&str] = &[
@@ -69,15 +74,17 @@ fn build_agent() -> Result<ureq::Agent> {
     Ok(ureq::AgentBuilder::new()
         .timeout_connect(TIMEOUT)
         .timeout_read(TIMEOUT)
+        .timeout_write(TIMEOUT)
+        // The three above are per-operation, so a server that trickles one byte at a time would
+        // hold a container's start-up open indefinitely. This is the deadline for the whole
+        // exchange.
+        .timeout(DEADLINE)
         .redirects(0)
         .tls_config(std::sync::Arc::new(tls_config()?))
         .build())
 }
 
 fn warn_about_ignored_tls_vars() {
-    if env_path(CA_FILE_VAR).is_some() {
-        return;
-    }
     for name in IGNORED_TLS_VARS {
         if std::env::var_os(name).is_some_and(|v| !v.is_empty()) {
             eprintln!(
@@ -218,8 +225,28 @@ pub fn check(
             code,
             response: Box::new(response),
         }),
-        Err(e) => Err(Failure::Transport(e.to_string())),
+        Err(ureq::Error::Transport(transport)) => Err(Failure::Transport(describe(&transport))),
     }
+}
+
+/// Describe a transport failure without the request URL.
+///
+/// `ureq`'s own `Display` for a transport error starts with the whole URL it was fetching. For the
+/// CyberArk provider that URL carries the application id in its query string, so passing the
+/// rendered error through would put a credential-adjacent value on stderr and into a CI log on the
+/// first refused connection. The kind, the message and the underlying I/O error together say
+/// everything useful about *why* the request failed, and none of them carry the URL.
+fn describe(transport: &ureq::Transport) -> String {
+    let mut text = transport.kind().to_string();
+    if let Some(message) = transport.message() {
+        text.push_str(": ");
+        text.push_str(message);
+    }
+    if let Some(source) = std::error::Error::source(transport) {
+        text.push_str(": ");
+        text.push_str(&source.to_string());
+    }
+    text
 }
 
 fn env_path(name: &str) -> Option<String> {
@@ -247,10 +274,22 @@ pub fn percent_encode(value: &str) -> String {
 }
 
 /// Percent-encode each `/`-separated segment and rejoin them with literal separators.
+///
+/// A segment that is entirely dots is escaped rather than passed through, even though `.` is
+/// unreserved. URL normalisation removes `.` and `..` segments before the request goes out, so a
+/// path containing one would address somewhere other than where it says. The parsers reject those
+/// segments already; this is the second lock, so that a future caller cannot reintroduce the
+/// problem by forgetting the first.
 pub fn percent_encode_path(value: &str) -> String {
     value
         .split('/')
-        .map(percent_encode)
+        .map(|segment| {
+            if !segment.is_empty() && segment.bytes().all(|b| b == b'.') {
+                segment.replace('.', "%2E")
+            } else {
+                percent_encode(segment)
+            }
+        })
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -279,6 +318,15 @@ mod tests {
             "prod/db/pass%20word"
         );
         assert_eq!(percent_encode_path("single"), "single");
+    }
+
+    #[test]
+    fn escapes_a_dot_only_segment_so_it_cannot_traverse() {
+        assert_eq!(percent_encode_path("a/../b"), "a/%2E%2E/b");
+        assert_eq!(percent_encode_path("a/./b"), "a/%2E/b");
+        assert_eq!(percent_encode_path("a/.../b"), "a/%2E%2E%2E/b");
+        // A dot inside a segment is an ordinary character and stays one.
+        assert_eq!(percent_encode_path("a/db.password"), "a/db.password");
     }
 
     #[test]

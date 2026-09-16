@@ -175,6 +175,10 @@ fn sealref() -> Command {
         "CONJUR_AUTHN_LOGIN",
         "CONJUR_AUTHN_API_KEY",
         "CONJUR_AUTHN_API_KEY_FILE",
+        "VAULT_CACERT",
+        "VAULT_CAPATH",
+        "VAULT_SKIP_VERIFY",
+        "CONJUR_CERT_FILE",
     ] {
         command.env_remove(name);
     }
@@ -226,9 +230,12 @@ fn vault_sends_the_namespace_header_when_one_is_set() {
 
 #[test]
 fn vault_reports_a_status_without_the_response_body() {
-    let server = TestServer::start(vec![
-        Route::json("GET", "/v1/secret/data/app", "{}").status(403)
-    ]);
+    let server = TestServer::start(vec![Route::json(
+        "GET",
+        "/v1/secret/data/app",
+        r#"{"errors":["1 error occurred: permission denied for policy team-a"]}"#,
+    )
+    .status(403)]);
     sealref()
         .env("VAULT_ADDR", &server.address)
         .env("VAULT_TOKEN", "s.testtoken")
@@ -237,7 +244,8 @@ fn vault_reports_a_status_without_the_response_body() {
         .failure()
         .stderr(predicate::str::contains("HTTP 403"))
         .stderr(predicate::str::contains("secret/app#password"))
-        .stderr(predicate::str::contains("s.testtoken").not());
+        .stderr(predicate::str::contains("s.testtoken").not())
+        .stderr(predicate::str::contains("permission denied").not());
 }
 
 #[test]
@@ -373,6 +381,84 @@ fn ccp_reports_the_error_code_but_not_the_error_message() {
         .stderr(predicate::str::contains("MySafe/pg-main#Content"))
         .stderr(predicate::str::contains("10.0.0.9").not())
         .stderr(predicate::str::contains("machine").not());
+}
+
+#[test]
+fn conjur_never_echoes_the_response_body() {
+    // A Conjur read returns the secret AS the response body, so an error handler that quotes a
+    // body is a direct disclosure. This route fails, but with a body shaped like a secret.
+    let server = TestServer::start(vec![Route::text(
+        "GET",
+        "/secrets/myorg/variable/prod/db/password",
+        "SECRET-BODY-THAT-MUST-NOT-BE-PRINTED",
+    )
+    .status(500)]);
+    sealref()
+        .env("CONJUR_APPLIANCE_URL", &server.address)
+        .env("CONJUR_ACCOUNT", "myorg")
+        .env("CONJUR_AUTHN_TOKEN", CONJUR_TOKEN_JSON)
+        .args(["resolve", "--ref", "seal:conjur:prod/db/password"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("HTTP 500"))
+        .stderr(predicate::str::contains("SECRET-BODY-THAT-MUST-NOT-BE-PRINTED").not());
+}
+
+#[test]
+fn conjur_refuses_an_empty_value_rather_than_starting_with_one() {
+    let server = TestServer::start(vec![Route::text(
+        "GET",
+        "/secrets/myorg/variable/prod/db/password",
+        "",
+    )]);
+    sealref()
+        .env("CONJUR_APPLIANCE_URL", &server.address)
+        .env("CONJUR_ACCOUNT", "myorg")
+        .env("CONJUR_AUTHN_TOKEN", CONJUR_TOKEN_JSON)
+        .args(["resolve", "--ref", "seal:conjur:prod/db/password"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("empty value"));
+}
+
+#[test]
+fn a_transport_failure_does_not_print_the_request_url() {
+    // The CCP request URL carries the application id in its query string, and a refused connection
+    // is an ordinary first-deployment event that lands straight in a CI log.
+    sealref()
+        .env("SEALREF_CCP_URL", "http://127.0.0.1:1")
+        .env("SEALREF_CCP_APP_ID", "SUPER-SECRET-APPID")
+        .args(["resolve", "--ref", "seal:ccp:MySafe/pg-main#Content"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("MySafe/pg-main#Content"))
+        .stderr(predicate::str::contains("cannot reach"))
+        .stderr(predicate::str::contains("SUPER-SECRET-APPID").not())
+        .stderr(predicate::str::contains("AIMWebService").not());
+}
+
+#[test]
+fn a_traversing_reference_is_refused_before_any_request() {
+    let server = TestServer::start(vec![]);
+    for reference in [
+        "seal:conjur:../../otheracct/variable/prod/db",
+        "seal:vault:secret/../../sys/seal-status#x",
+    ] {
+        sealref()
+            .env("CONJUR_APPLIANCE_URL", &server.address)
+            .env("CONJUR_ACCOUNT", "myorg")
+            .env("CONJUR_AUTHN_TOKEN", CONJUR_TOKEN_JSON)
+            .env("VAULT_ADDR", &server.address)
+            .env("VAULT_TOKEN", "s.testtoken")
+            .args(["resolve", "--ref", reference])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("segment"));
+    }
+    assert!(
+        server.requests().is_empty(),
+        "a traversing reference must never reach the server"
+    );
 }
 
 #[test]

@@ -354,8 +354,9 @@ fn replace_file(path: &Path, contents: &str) -> Result<()> {
         // The temporary file is created owner-only and then widened to the original's permissions,
         // rather than created at the umask and narrowed afterwards. Rewrapped text holds
         // ciphertext rather than plaintext, but a file that is briefly world-readable while it is
-        // being written is not a habit worth having in this tool.
-        sealref::exec::write_private(&temporary, contents.as_bytes())?;
+        // being written is not a habit worth having in this tool. It must also not already exist:
+        // a leftover from a crashed run and a planted symlink look the same from here.
+        sealref::exec::create_private(&temporary, contents.as_bytes())?;
         let permissions = std::fs::metadata(path)
             .map_err(|e| Error::io(path.display().to_string(), e))?
             .permissions();

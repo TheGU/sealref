@@ -107,11 +107,8 @@ impl VaultConfig {
                 )))
             }
         };
-        let body = Zeroizing::new(response.into_string().map_err(|e| {
-            Error::Vault(format!(
-                "unreadable response for {}: {e}",
-                reference.locator()
-            ))
+        let body = Zeroizing::new(response.into_string().map_err(|_| {
+            Error::Vault(format!("unreadable response for {}", reference.locator()))
         })?);
         extract_field(&body, &reference.field, &reference.locator())
     }

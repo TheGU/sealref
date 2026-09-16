@@ -7,7 +7,7 @@ team can read it.
 ## Likely
 
 - **Release binaries for more targets.** Today the release workflow builds `x86_64` Linux (musl),
-  Windows and macOS. `aarch64` Linux and Apple Silicon are the obvious gaps.
+  `x86_64` Windows and Apple Silicon macOS. `aarch64` Linux and Intel macOS are the gaps.
 - **A multi-architecture container image.** The published image is `linux/amd64` only.
 - **`check --format json`.** The current output is one line per finding, which is easy to read and
   awkward to consume. A machine-readable form would make the CI gate more useful.

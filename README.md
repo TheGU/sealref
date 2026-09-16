@@ -128,6 +128,12 @@ same way.
 No server address is part of any reference. That is what lets the identical config line work in
 staging and in production, with only the environment differing between them.
 
+A `.` or `..` path segment is refused. URL normalisation would remove it before the request went
+out, so `seal:conjur:../../other/variable/x` would read a different Conjur account and
+`seal:vault:secret/../../sys/seal-status#x` would leave the KV mount, in both cases carrying the
+run's token. A reference is the artefact you commit and review in a diff, so it has to mean what
+it reads as.
+
 ## Keys and the keyring
 
 The keyring is text. One key per line, blank lines and `#` comments ignored:
@@ -255,7 +261,7 @@ tmpfs:
 
 Replaces every `{{seal:...}}` occurrence in a file with its resolved value, for software that
 takes a configuration file rather than environment variables. Writes to stdout, or to `--out` with
-mode 0600. Braces that do not contain a `seal:` reference are left alone. An unresolved reference
+mode 0600, which is applied even when the destination already exists. Braces that do not contain a `seal:` reference are left alone. An unresolved reference
 is an error and no file is written.
 
 ```ini
@@ -543,9 +549,11 @@ delivered by a path the encrypted files do not travel on, or the boundary does n
 ### What the command SealRef runs can see
 
 `exec` removes `SEALREF_KEY`, `SEALREF_KEY_FILE` and `SEALREF_KEY_FD` from the environment it
-hands to the application. The master key opens every sealed value in the deployment, so leaving it
-beside the one password the application asked for would have given away far more than the
-application needed.
+hands to the application, and closes the `SEALREF_KEY_FD` descriptor itself before handing over.
+Removing the variable alone would not have been enough: a descriptor survives `execvp` unless
+something closes it, so an application could have read the whole keyring from descriptor 3. The
+master key opens every sealed value in the deployment, so leaving it beside the one password the
+application asked for would have given away far more than the application needed.
 
 The provider credentials are a different case and are passed through. `VAULT_TOKEN`,
 `CONJUR_AUTHN_API_KEY` and the rest may belong to the application as much as to SealRef: plenty of

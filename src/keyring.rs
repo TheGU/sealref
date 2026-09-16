@@ -14,6 +14,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -33,6 +34,11 @@ pub const DEFAULT_KEY_FILE: &str = "/run/secrets/sealref_key";
 /// every sealed value is a larger prize than the one password the application asked for, and no
 /// application has a reason to read it.
 pub const KEY_SOURCE_VARS: &[&str] = &["SEALREF_KEY", "SEALREF_KEY_FILE", "SEALREF_KEY_FD"];
+
+/// Set once the `SEALREF_KEY_FD` descriptor has been taken ownership of, so it is never closed
+/// twice. A double close would be worse than a leak: the number can already have been reused by
+/// another open file by then.
+static KEY_FD_TAKEN: AtomicBool = AtomicBool::new(false);
 
 /// Argon2id memory cost, in KiB (64 MiB).
 pub const ARGON2_MEMORY_KIB: u32 = 65_536;
@@ -230,10 +236,7 @@ fn read_file(path: &Path) -> Result<Zeroizing<String>> {
 }
 
 #[cfg(unix)]
-fn read_fd(fd: &str) -> Result<Zeroizing<String>> {
-    use std::io::Read;
-    use std::os::fd::FromRawFd;
-
+fn parse_fd(fd: &str) -> Result<i32> {
     let raw: i32 = fd
         .trim()
         .parse()
@@ -243,8 +246,24 @@ fn read_fd(fd: &str) -> Result<Zeroizing<String>> {
             "SEALREF_KEY_FD is not a file descriptor: \"{fd}\""
         )));
     }
-    // Safety: the caller states this descriptor is open and holds keyring text. Taking ownership
-    // means it is closed once the keyring is parsed, which is what we want for key material.
+    Ok(raw)
+}
+
+#[cfg(unix)]
+fn read_fd(fd: &str) -> Result<Zeroizing<String>> {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+
+    let raw = parse_fd(fd)?;
+    if KEY_FD_TAKEN.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg(
+            "SEALREF_KEY_FD has already been read: a descriptor can only be consumed once"
+                .to_string(),
+        ));
+    }
+    // Safety: the caller states this descriptor is open and holds keyring text, and the swap above
+    // guarantees nothing else has taken it. Taking ownership means it is closed once the keyring
+    // is parsed, which is what we want for key material.
     let mut file = unsafe { std::fs::File::from_raw_fd(raw) };
     let mut text = Zeroizing::new(String::new());
     file.read_to_string(&mut text)
@@ -258,6 +277,37 @@ fn read_fd(_fd: &str) -> Result<Zeroizing<String>> {
         "SEALREF_KEY_FD is not supported on Windows: use SEALREF_KEY_FILE or SEALREF_KEY"
             .to_string(),
     ))
+}
+
+/// Close the `SEALREF_KEY_FD` descriptor if nothing has consumed it yet.
+///
+/// Removing `SEALREF_KEY_FD` from the environment handed to the application is not enough on its
+/// own. The descriptor itself is inherited across `execvp` unless something closes it, and the
+/// shell or supervisor that opened it did not set close-on-exec, so an application could simply
+/// read the whole keyring from descriptor 3. A run whose references are all remote never loads the
+/// keyring at all, so the descriptor would still be open at handover.
+///
+/// Call this after every reference has been resolved and immediately before handing the process
+/// over. Calling it earlier would close the descriptor out from under a `seal:v1` reference that
+/// has not been resolved yet.
+pub fn close_key_fd() {
+    #[cfg(unix)]
+    {
+        use std::os::fd::FromRawFd;
+
+        let Ok(fd) = std::env::var("SEALREF_KEY_FD") else {
+            return;
+        };
+        let Ok(raw) = parse_fd(&fd) else {
+            return;
+        };
+        if KEY_FD_TAKEN.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Safety: the swap above guarantees this descriptor has not been taken, so nothing else
+        // owns it. Dropping the File closes it.
+        drop(unsafe { std::fs::File::from_raw_fd(raw) });
+    }
 }
 
 #[cfg(test)]

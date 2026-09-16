@@ -39,10 +39,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `exec` closes the `SEALREF_KEY_FD` descriptor before handing the process over. Removing the
+  variable from the child's environment was not enough on its own: a descriptor survives `execvp`
+  unless something closes it, so an application could read the whole keyring from descriptor 3.
+- A `.` or `..` segment in a `seal:conjur` or `seal:vault` reference is refused. URL normalisation
+  removed it before the request went out, so such a reference addressed a different Conjur account
+  or a path outside the Vault KV mount, carrying the run's token with it.
+- A transport failure no longer prints the request URL. For the Central Credential Provider that
+  URL carries the application id in its query string, so a refused connection wrote it to stderr.
+- A rendered template or `--out` file is narrowed to mode 0600 even when the destination already
+  exists. The mode passed at open time applies only when a file is created, so writing over a path
+  left at the umask by an earlier run produced a world-readable secret.
+- `rewrap` refuses to write its temporary file if the path already exists, rather than following
+  what is there, and creates it owner-only before widening it to the original's permissions.
+- A Conjur variable that reads back empty is an error rather than an empty resolved value.
 - `--template a:/run/app.ini` now splits correctly on unix. A single-letter source name was read
   as a Windows drive letter on every platform.
-- `rewrap` creates its temporary file owner-only and then widens it to the original's permissions,
-  instead of creating it at the umask.
+- The HTTP client has a deadline for the whole request, not only per-operation timeouts, so a
+  server feeding one byte at a time can no longer hold a container's start-up open indefinitely.
 
 ## [0.1.0] - 2026-08-29
 

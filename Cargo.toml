@@ -24,8 +24,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
-ureq = "2"
-webpki-roots = "1"
+# Default features would also pull gzip, which nothing here uses. The version is pinned to the one
+# ureq itself depends on so the Mozilla root bundle is compiled in once rather than twice.
+ureq = { version = "2", default-features = false, features = ["tls"] }
+webpki-roots = "0.26"
 zeroize = { version = "1", features = ["alloc"] }
 
 [dev-dependencies]

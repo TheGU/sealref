@@ -111,10 +111,33 @@ pub fn render_templates(
     Ok(written)
 }
 
-/// Write a file that only its owner can read.
+/// Write a file that only its owner can read, replacing whatever was there.
+///
+/// The mode passed to `open` applies only when the file is created, so a destination that already
+/// exists keeps the permissions it had. A template rendered over a path that some earlier run or
+/// init container created at the umask would otherwise be a world-readable secret, so the mode is
+/// set again once the handle is open.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_with(path, bytes, false)
+}
+
+/// The same, but the file must not already exist.
+///
+/// Used for the temporary file behind an in-place rewrite, where an existing path is either a
+/// leftover from a crashed run or something planted to be followed, and both deserve an error
+/// rather than a write.
+pub fn create_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_with(path, bytes, true)
+}
+
+fn write_with(path: &Path, bytes: &[u8], exclusive: bool) -> Result<()> {
     let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true);
+    if exclusive {
+        options.create_new(true);
+    } else {
+        options.create(true).truncate(true);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -123,6 +146,12 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = options
         .open(path)
         .map_err(|e| Error::io(path.display().to_string(), e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| Error::io(path.display().to_string(), e))?;
+    }
     file.write_all(bytes)
         .map_err(|e| Error::io(path.display().to_string(), e))?;
     file.flush()
@@ -140,6 +169,10 @@ pub fn run(options: &ExecOptions, resolver: &mut Resolver) -> Result<i32> {
         .ok_or_else(|| Error::Msg("no command given after \"--\"".to_string()))?;
     let env = build_env(&options.env_files, resolver)?;
     render_templates(&options.templates, resolver)?;
+    // Everything that needed the keyring has had it by now. The descriptor is inherited across
+    // exec unless it is closed here, and the environment variable naming it was already removed,
+    // so an application that went looking for descriptor 3 would find the whole keyring.
+    keyring::close_key_fd();
     spawn(program, args, &env)
 }
 

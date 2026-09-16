@@ -686,6 +686,60 @@ fn exec_does_not_hand_the_key_file_path_to_the_command() {
         .stdout(predicate::str::contains("sealref.key").not());
 }
 
+/// The descriptor route is the one the README calls the most secure, so it is the one that must
+/// not leak. Removing the variable name is not enough: the descriptor itself survives `execvp`
+/// unless SealRef closes it, and a run with no `seal:v1` reference never consumes it.
+#[cfg(unix)]
+#[test]
+fn exec_does_not_leave_the_keyring_descriptor_open_for_the_command() {
+    let dir = TempDir::new().unwrap();
+    let key_file = write(
+        &dir,
+        "sealref.key",
+        &format!(
+            "k1 {KEY_A}
+"
+        ),
+    );
+    let child = write(
+        &dir,
+        "child.sh",
+        "echo \"VAR=[$SEALREF_KEY_FD]\"
+echo \"FD3=[$(cat <&3 2>&1)]\"
+",
+    );
+    let probe = write(
+        &dir,
+        "probe.sh",
+        &format!(
+            "exec 3<{key}
+export SEALREF_KEY_FD=3
+{sealref} exec -- /bin/sh {child}
+",
+            key = path_arg(&key_file),
+            sealref = path_arg(&assert_cmd::cargo::cargo_bin("sealref")),
+            child = path_arg(&child),
+        ),
+    );
+
+    let output = std::process::Command::new("/bin/sh")
+        .arg(path_arg(&probe))
+        .env_remove("SEALREF_KEY")
+        .env_remove("SEALREF_KEY_FILE")
+        .output()
+        .expect("the probe script runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("VAR=[]"),
+        "the variable should be stripped, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains(KEY_A),
+        "the command read the keyring from the inherited descriptor: {stdout}"
+    );
+}
+
 #[test]
 fn exec_still_resolves_after_the_keyring_is_stripped() {
     // Stripping the keyring from the child environment must not break resolution, which reads the
