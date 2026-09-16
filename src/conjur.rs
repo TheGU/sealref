@@ -116,7 +116,10 @@ impl ConjurConfig {
         let url = self.secret_url(&reference.id);
         let response = http::agent()?
             .get(&url)
-            .set("Authorization", &format!("Token token=\"{}\"", *token))
+            .set(
+                "Authorization",
+                &Zeroizing::new(format!("Token token=\"{}\"", *token)),
+            )
             .call();
         let response = match http::check(response) {
             Ok(response) => response,
