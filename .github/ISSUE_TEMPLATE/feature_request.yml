@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a change. Please read the scope notes first.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SealRef is deliberately small. Please check
+        [ROADMAP.md](https://github.com/TheGU/sealref/blob/main/ROADMAP.md) and the
+        "What SealRef deliberately does not do" table in the README first: several
+        obvious-looking features have already been decided against, and the reasons are written
+        down there.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that you cannot do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like SealRef to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Including whether another tool already solves this well.

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/TheGU/sealref/security/advisories/new
+    about: Security issues are reported privately, never as a public issue.
+  - name: Ask a question
+    url: https://github.com/TheGU/sealref/discussions
+    about: For usage questions and deployment advice.

@@ -191,10 +191,14 @@ fn unseal_adds_a_newline_on_request() {
 #[test]
 fn a_tampered_reference_fails() {
     let sealed = seal_value("k1", "hunter2");
-    let mut bytes = sealed.into_bytes();
-    let last = bytes.len() - 1;
-    bytes[last] = if bytes[last] == b'A' { b'B' } else { b'A' };
-    let tampered = String::from_utf8(bytes).unwrap();
+    // Alter the first symbol of the ciphertext rather than the last one. The final symbol of an
+    // unpadded base64url string carries fewer than six significant bits, so changing it can
+    // produce a string that is not valid base64 at all, and the reference would then be rejected
+    // by the parser before the authentication tag was ever checked. This test is about the tag.
+    let (prefix, blob) = sealed.rsplit_once(':').expect("seal:v1:<kid>:<ciphertext>");
+    let mut symbols: Vec<u8> = blob.bytes().collect();
+    symbols[0] = if symbols[0] == b'A' { b'B' } else { b'A' };
+    let tampered = format!("{prefix}:{}", String::from_utf8(symbols).unwrap());
     sealref()
         .args(["unseal", "--ref", &tampered])
         .assert()

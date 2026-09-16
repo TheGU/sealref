@@ -13,7 +13,6 @@ WORKDIR /src
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-COPY tests ./tests
 
 RUN cargo build --release --locked --target x86_64-unknown-linux-musl
 

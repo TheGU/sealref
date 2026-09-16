@@ -1,9 +1,15 @@
 /target
+/dist
 
 # Key material and rendered secrets must never be committed.
 *.key
 sealref.key
 *.sealref-tmp
+
+# Client certificates and private keys for mutual TLS.
+*.pem
+*.p12
+*.pfx
 
 # Local environment files. Commit the sealed example instead.
 .env

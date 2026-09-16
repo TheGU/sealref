@@ -270,7 +270,7 @@ fn parse_ccp(body: &str) -> Result<CcpRef> {
         ));
     }
     for (name, value) in [("safe", safe), ("object", object), ("property", field)] {
-        if value.chars().any(char::is_whitespace) && value.trim() != value {
+        if value.trim() != value {
             return Err(malformed(&format!(
                 "the {name} has leading or trailing whitespace"
             )));

@@ -1,0 +1,48 @@
+name: Bug report
+description: Something does not behave as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste a secret, a keyring, a token, or a `seal:v1` reference you care about.
+        A reference encrypted under a throwaway key from `sealref keygen` is fine.
+
+  - type: input
+    id: version
+    attributes:
+      label: SealRef version
+      description: The output of `sealref --version`.
+      placeholder: sealref 0.2.0
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: Linux x86_64, in a scratch image copied from sealref:0.2.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The command you ran and what it printed, with secrets removed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: >
+        The reference shape, the provider, and which key or token source you use. Names only.
