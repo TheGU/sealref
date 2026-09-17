@@ -24,13 +24,13 @@ pub fn seal(key: &[u8; 32], kid: &str, plaintext: &[u8]) -> Result<String> {
     if !reference::is_valid_kid(kid) {
         return Err(Error::InvalidKid(kid.to_string()));
     }
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    let cipher = XChaCha20Poly1305::new(<&Key>::from(key));
     let mut nonce = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce);
     let aad = associated_data(kid);
     let ciphertext = cipher
         .encrypt(
-            XNonce::from_slice(&nonce),
+            <&XNonce>::from(&nonce),
             Payload {
                 msg: plaintext,
                 aad: aad.as_bytes(),
@@ -55,11 +55,14 @@ pub fn open(key: &[u8; 32], kid: &str, blob: &[u8]) -> Result<Zeroizing<Vec<u8>>
         });
     }
     let (nonce, ciphertext) = blob.split_at(NONCE_LEN);
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    let nonce: &[u8; NONCE_LEN] = nonce
+        .try_into()
+        .expect("blob was just checked to be at least NONCE_LEN bytes long");
+    let cipher = XChaCha20Poly1305::new(<&Key>::from(key));
     let aad = associated_data(kid);
     let plaintext = cipher
         .decrypt(
-            XNonce::from_slice(nonce),
+            <&XNonce>::from(nonce),
             Payload {
                 msg: ciphertext,
                 aad: aad.as_bytes(),
@@ -172,5 +175,19 @@ mod tests {
     #[test]
     fn random_keys_differ() {
         assert_ne!(*random_key(), *random_key());
+    }
+
+    /// A reference sealed by an earlier release must still open.
+    ///
+    /// Every other test here seals and opens in the same process, so they would all still pass if
+    /// an upgrade of `chacha20poly1305` quietly changed the construction. The value below was
+    /// produced once and is never regenerated: it is the only thing standing between a dependency
+    /// bump and every secret already sealed in the field becoming unreadable.
+    #[test]
+    fn opens_a_reference_sealed_by_an_earlier_release() {
+        const FROZEN: &str =
+            "seal:v1:k1:RuBKP03xTLp0BKcR2xXMmS1H0-MZkTsnycj0bwXDGrYfOvo64lrDuFnyefLBTm8";
+        let opened = open(&key(), "k1", &blob_of(FROZEN)).unwrap();
+        assert_eq!(&*opened, b"hunter2");
     }
 }

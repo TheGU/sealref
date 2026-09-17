@@ -14,6 +14,7 @@
 
 use std::fs;
 use std::path::Path;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -38,6 +39,7 @@ pub const KEY_SOURCE_VARS: &[&str] = &["SEALREF_KEY", "SEALREF_KEY_FILE", "SEALR
 /// Set once the `SEALREF_KEY_FD` descriptor has been taken ownership of, so it is never closed
 /// twice. A double close would be worse than a leak: the number can already have been reused by
 /// another open file by then.
+#[cfg(unix)]
 static KEY_FD_TAKEN: AtomicBool = AtomicBool::new(false);
 
 /// Argon2id memory cost, in KiB (64 MiB).
@@ -376,6 +378,30 @@ mod tests {
         let a = derive_key("dev", "correct horse battery staple").unwrap();
         let b = derive_key("dev", "correct horse battery staple").unwrap();
         assert_eq!(*a, *b);
+    }
+
+    /// The `argon2id:` form must derive the same key it derived in earlier releases.
+    ///
+    /// A committed development keyring is only useful because this derivation is fixed, and the
+    /// two tests around this one would both still pass if an upgrade of `argon2` or `sha2` changed
+    /// the salt or the parameters. These vectors were produced once and are never regenerated.
+    #[test]
+    fn argon2id_derivation_matches_frozen_vectors() {
+        fn hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        }
+
+        let dev = derive_key("dev", "correct horse battery staple").unwrap();
+        assert_eq!(
+            hex(&*dev),
+            "26080f33732ff86cf90649745fe23f58ab70f62bd1af726873d4adc0bdc0a3a6"
+        );
+
+        let stage = derive_key("stage", "correct horse battery staple").unwrap();
+        assert_eq!(
+            hex(&*stage),
+            "565721cae6aaed6d0b47ff9d5d8d22d194cf5c60991da8d62cfe8892c44913a2"
+        );
     }
 
     #[test]

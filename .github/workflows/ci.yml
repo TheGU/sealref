@@ -20,7 +20,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the toolchain
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
       - name: Check formatting
@@ -34,7 +34,7 @@ jobs:
     name: minimum supported rust version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Read the MSRV from Cargo.toml
         id: msrv
         run: echo "version=$(grep '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
@@ -47,7 +47,7 @@ jobs:
     name: static image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the scratch image
         run: docker build -t sealref:ci .
       - name: Prove the binary runs with nothing else in the image
