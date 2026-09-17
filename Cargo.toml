@@ -18,7 +18,7 @@ argon2 = "0.6"
 base64 = "0.22"
 chacha20poly1305 = "0.11"
 clap = { version = "4", features = ["derive"] }
-rand = "0.8"
+rand = "0.10"
 regex-lite = "0.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = { version = "1", features = ["std"] }
