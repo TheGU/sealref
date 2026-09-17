@@ -13,6 +13,8 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 argon2 = "0.6"
+# Held at the version ureq depends on. 0.23 is a clean drop-in here, but ureq has not moved,
+# so taking it would compile base64 into the binary twice for no behaviour we need.
 base64 = "0.22"
 chacha20poly1305 = "0.11"
 clap = { version = "4", features = ["derive"] }
