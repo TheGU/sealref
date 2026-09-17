@@ -24,13 +24,13 @@ pub fn seal(key: &[u8; 32], kid: &str, plaintext: &[u8]) -> Result<String> {
     if !reference::is_valid_kid(kid) {
         return Err(Error::InvalidKid(kid.to_string()));
     }
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    let cipher = XChaCha20Poly1305::new(<&Key>::from(key));
     let mut nonce = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce);
     let aad = associated_data(kid);
     let ciphertext = cipher
         .encrypt(
-            XNonce::from_slice(&nonce),
+            <&XNonce>::from(&nonce),
             Payload {
                 msg: plaintext,
                 aad: aad.as_bytes(),
@@ -55,11 +55,14 @@ pub fn open(key: &[u8; 32], kid: &str, blob: &[u8]) -> Result<Zeroizing<Vec<u8>>
         });
     }
     let (nonce, ciphertext) = blob.split_at(NONCE_LEN);
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    let nonce: &[u8; NONCE_LEN] = nonce
+        .try_into()
+        .expect("blob was just checked to be at least NONCE_LEN bytes long");
+    let cipher = XChaCha20Poly1305::new(<&Key>::from(key));
     let aad = associated_data(kid);
     let plaintext = cipher
         .decrypt(
-            XNonce::from_slice(nonce),
+            <&XNonce>::from(nonce),
             Payload {
                 msg: ciphertext,
                 aad: aad.as_bytes(),
