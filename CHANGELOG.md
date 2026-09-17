@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response and its body parsed as a secret.
 - SealRef reports on stderr when `VAULT_CACERT`, `VAULT_CAPATH`, `VAULT_SKIP_VERIFY` or
   `CONJUR_CERT_FILE` is set, rather than ignoring a variable meant to narrow trust.
+- Argon2, XChaCha20-Poly1305 and SHA-256 move to their new major versions. The sealed format
+  and the `argon2id:` derivation are byte for byte what they were, and both are now held to
+  frozen test vectors so no later dependency bump can change them without the suite noticing.
 
 ### Fixed
 
@@ -57,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a Windows drive letter on every platform.
 - The HTTP client has a deadline for the whole request, not only per-operation timeouts, so a
   server feeding one byte at a time can no longer hold a container's start-up open indefinitely.
+
+### Security
+
+- rustls moves to 0.23.45, closing RUSTSEC-2026-0285: TLS 1.3 handshake messages were accepted
+  across encryption level boundaries. Release binaries are built from the lockfile, so the
+  binaries published for 0.1.0 carry the affected version.
 
 ## [0.1.0] - 2026-08-29
 
