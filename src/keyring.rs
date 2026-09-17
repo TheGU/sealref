@@ -14,6 +14,7 @@
 
 use std::fs;
 use std::path::Path;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -38,6 +39,7 @@ pub const KEY_SOURCE_VARS: &[&str] = &["SEALREF_KEY", "SEALREF_KEY_FILE", "SEALR
 /// Set once the `SEALREF_KEY_FD` descriptor has been taken ownership of, so it is never closed
 /// twice. A double close would be worse than a leak: the number can already have been reused by
 /// another open file by then.
+#[cfg(unix)]
 static KEY_FD_TAKEN: AtomicBool = AtomicBool::new(false);
 
 /// Argon2id memory cost, in KiB (64 MiB).
