@@ -173,4 +173,18 @@ mod tests {
     fn random_keys_differ() {
         assert_ne!(*random_key(), *random_key());
     }
+
+    /// A reference sealed by an earlier release must still open.
+    ///
+    /// Every other test here seals and opens in the same process, so they would all still pass if
+    /// an upgrade of `chacha20poly1305` quietly changed the construction. The value below was
+    /// produced once and is never regenerated: it is the only thing standing between a dependency
+    /// bump and every secret already sealed in the field becoming unreadable.
+    #[test]
+    fn opens_a_reference_sealed_by_an_earlier_release() {
+        const FROZEN: &str =
+            "seal:v1:k1:RuBKP03xTLp0BKcR2xXMmS1H0-MZkTsnycj0bwXDGrYfOvo64lrDuFnyefLBTm8";
+        let opened = open(&key(), "k1", &blob_of(FROZEN)).unwrap();
+        assert_eq!(&*opened, b"hunter2");
+    }
 }
