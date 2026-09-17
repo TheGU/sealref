@@ -29,7 +29,7 @@ thiserror = "2"
 # Default features would also pull gzip, which nothing here uses. The version is pinned to the one
 # ureq itself depends on so the Mozilla root bundle is compiled in once rather than twice.
 ureq = { version = "2", default-features = false, features = ["tls"] }
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 zeroize = { version = "1", features = ["alloc"] }
 
 [dev-dependencies]
