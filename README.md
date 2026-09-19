@@ -47,8 +47,25 @@ cargo build --release
 # target/release/sealref (target\release\sealref.exe on Windows)
 ```
 
+From a release, which carries a prebuilt binary for Linux, Windows and macOS with a `.sha256`
+beside each archive:
+
+```bash
+curl -fsSLO https://github.com/TheGU/sealref/releases/download/v0.2.0/sealref-v0.2.0-x86_64-unknown-linux-musl.tar.gz
+curl -fsSL  https://github.com/TheGU/sealref/releases/download/v0.2.0/sealref-v0.2.0-x86_64-unknown-linux-musl.tar.gz.sha256   | tr -d '
+' | sed 's/$/  sealref-v0.2.0-x86_64-unknown-linux-musl.tar.gz/' | sha256sum -c -
+tar -xzf sealref-v0.2.0-x86_64-unknown-linux-musl.tar.gz
+```
+
 As a container image, which builds a static `x86_64-unknown-linux-musl` binary and ships it in a
-`scratch` image that contains nothing else:
+`scratch` image that contains nothing else. Every release publishes one to GHCR, and that is what
+another Dockerfile's `COPY --from` needs:
+
+```bash
+docker run --rm ghcr.io/thegu/sealref:0.2.0 --version
+```
+
+To build the same image yourself:
 
 ```bash
 docker build -t sealref:0.2.0 .
@@ -329,7 +346,7 @@ config.ini.template 1
 ```dockerfile
 FROM quay.io/keycloak/keycloak:latest
 
-COPY --from=sealref:0.2.0 /sealref /usr/local/bin/sealref
+COPY --from=ghcr.io/thegu/sealref:0.2.0 /sealref /usr/local/bin/sealref
 
 ENTRYPOINT ["sealref", "exec", "--"]
 CMD ["/opt/keycloak/bin/kc.sh", "start"]
