@@ -6,13 +6,34 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  version:
+    name: the tag and Cargo.toml agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # v0.1.1 shipped a binary that reports 0.2.0, because the tag was cut from a main that had
+      # already taken the version bump. A release whose tag and contents disagree is worse than no
+      # release: whoever pins it gets behaviour the tag does not name, and nothing says so.
+      - name: Compare the tag with the crate version
+        run: |
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$crate" != "$tag" ]; then
+            echo "tag $GITHUB_REF_NAME carries crate version $crate" >&2
+            echo "retag, or bump Cargo.toml before tagging" >&2
+            exit 1
+          fi
+
   build:
     name: ${{ matrix.target }}
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -63,6 +84,33 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.sha256
+
+  image:
+    name: the scratch image on GHCR
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to GHCR
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      # The tarballs cannot serve this purpose. An image is what `COPY --from` needs, and it is
+      # what keeps a consumer from having to carry a shell, curl and tar in a stage that has none
+      # of them just to fetch and verify an archive.
+      #
+      # The tag is the plain version, without the leading v, because that is how a FROM line pins.
+      # linux/amd64 only: the Dockerfile builds x86_64-unknown-linux-musl and nothing else.
+      - name: Build and push
+        run: |
+          repo=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/$repo:${GITHUB_REF_NAME#v}"
+          docker build -t "$image" .
+          docker run --rm "$image" --version
+          docker push "$image"
 
   publish:
     name: publish the release
