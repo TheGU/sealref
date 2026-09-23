@@ -12,8 +12,9 @@
 //! development keyring can be committed without holding anything that looks like a secret to a
 //! scanner; production keys must be random keys from `sealref keygen`.
 
+use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -51,9 +52,32 @@ pub const ARGON2_TIME: u32 = 3;
 /// Argon2id parallelism.
 pub const ARGON2_LANES: u32 = 1;
 
+/// Domain separation for key fingerprints, so a fingerprint is never the same hash as anything
+/// else computed over a key.
+pub const FINGERPRINT_LABEL: &[u8] = b"sealref:fingerprint:";
+
+/// How a keyring line wrote its key down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyForm {
+    /// A base64url line holding 32 random bytes, as `keygen` prints.
+    Random,
+    /// An `argon2id:<passphrase>` line, for development keyrings.
+    Argon2id,
+}
+
+impl fmt::Display for KeyForm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            KeyForm::Random => "random",
+            KeyForm::Argon2id => "argon2id",
+        })
+    }
+}
+
 /// One entry of the keyring.
 pub struct Key {
     kid: String,
+    form: KeyForm,
     secret: Zeroizing<[u8; 32]>,
 }
 
@@ -67,6 +91,29 @@ impl Key {
     pub fn bytes(&self) -> &[u8; 32] {
         &self.secret
     }
+
+    /// How the keyring line wrote this key down.
+    pub fn form(&self) -> KeyForm {
+        self.form
+    }
+
+    /// A short public identifier of the key material: the first 8 bytes of
+    /// `SHA-256(FINGERPRINT_LABEL || key)` as 16 lowercase hex characters.
+    ///
+    /// It lets two hosts confirm they hold the same key without either one revealing it. For a
+    /// random key, a 64-bit truncation of a domain-separated hash of 256 random bits reveals
+    /// nothing usable. For an argon2id key it is an offline test for passphrase guesses, but any
+    /// sealed value already offers the same test through its AEAD tag, every guess still costs a
+    /// full Argon2id run, and that form is for development keyrings by design.
+    pub fn fingerprint(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(FINGERPRINT_LABEL);
+        // The hasher buffers these bytes and is not zeroized when it is dropped. That copy lives
+        // for the rest of one short command, which is acceptable here.
+        hasher.update(self.secret.as_slice());
+        let digest = hasher.finalize();
+        digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+    }
 }
 
 impl std::fmt::Debug for Key {
@@ -74,6 +121,7 @@ impl std::fmt::Debug for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Key")
             .field("kid", &self.kid)
+            .field("form", &self.form)
             .field("secret", &"<redacted>")
             .finish()
     }
@@ -103,12 +151,13 @@ impl Keyring {
                         reason: "expected \"<kid> <key>\"".to_string(),
                     })?;
             let rest = rest.trim();
+            // The offending text is not echoed: on a line written the wrong way round, such as
+            // `argon2id:<passphrase> dev`, it is the passphrase.
             if !reference::is_valid_kid(kid) {
                 return Err(Error::KeyringSyntax {
                     line,
-                    reason: format!(
-                        "invalid key id \"{kid}\": expected 1 to 64 characters from [A-Za-z0-9._-]"
-                    ),
+                    reason: "invalid key id: expected 1 to 64 characters from [A-Za-z0-9._-]"
+                        .to_string(),
                 });
             }
             if keys.iter().any(|k| k.kid == kid) {
@@ -117,19 +166,22 @@ impl Keyring {
                     kid: kid.to_string(),
                 });
             }
-            let secret = if let Some(passphrase) = rest.strip_prefix("argon2id:") {
+            let (form, secret) = if let Some(passphrase) = rest.strip_prefix("argon2id:") {
                 if passphrase.is_empty() {
                     return Err(Error::KeyringSyntax {
                         line,
                         reason: "argon2id passphrase is empty".to_string(),
                     });
                 }
-                derive_key(kid, passphrase)?
+                (KeyForm::Argon2id, derive_key(kid, passphrase)?)
             } else {
-                decode_key(rest).map_err(|reason| Error::KeyringSyntax { line, reason })?
+                let secret =
+                    decode_key(rest).map_err(|reason| Error::KeyringSyntax { line, reason })?;
+                (KeyForm::Random, secret)
             };
             keys.push(Key {
                 kid: kid.to_string(),
+                form,
                 secret,
             });
         }
@@ -165,6 +217,11 @@ impl Keyring {
     /// The key ids held, in keyring order.
     pub fn kids(&self) -> impl Iterator<Item = &str> {
         self.keys.iter().map(|k| k.kid.as_str())
+    }
+
+    /// The keys held, in keyring order.
+    pub fn keys(&self) -> impl Iterator<Item = &Key> {
+        self.keys.iter()
     }
 }
 
@@ -207,29 +264,113 @@ pub fn derive_key(kid: &str, passphrase: &str) -> Result<Zeroizing<[u8; 32]>> {
     Ok(out)
 }
 
-/// Load the keyring from the first source that is present.
+/// Where a keyring comes from.
 ///
-/// Order: `SEALREF_KEY_FD`, then `SEALREF_KEY_FILE` (or [`DEFAULT_KEY_FILE`] when it exists), then
-/// `SEALREF_KEY`.
-pub fn load() -> Result<Keyring> {
-    let text = load_text()?;
-    Keyring::parse(&text)
+/// It names the source and never carries keyring text: `Inline` in particular holds nothing, so
+/// rendering a source can never print a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeySource {
+    /// `SEALREF_KEY_FD`, with the descriptor number as written.
+    Fd(String),
+    /// `SEALREF_KEY_FILE`, with the path it names.
+    File(PathBuf),
+    /// [`DEFAULT_KEY_FILE`], used when `SEALREF_KEY_FILE` is unset and the file exists.
+    DefaultFile,
+    /// `SEALREF_KEY`.
+    Inline,
 }
 
-fn load_text() -> Result<Zeroizing<String>> {
-    if let Ok(fd) = std::env::var("SEALREF_KEY_FD") {
-        return read_fd(&fd);
+impl fmt::Display for KeySource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            KeySource::Fd(fd) => write!(f, "SEALREF_KEY_FD {fd}"),
+            KeySource::File(path) => write!(f, "SEALREF_KEY_FILE {}", path.display()),
+            KeySource::DefaultFile => write!(f, "{DEFAULT_KEY_FILE} (default path)"),
+            KeySource::Inline => f.write_str("SEALREF_KEY (environment variable)"),
+        }
     }
-    if let Ok(path) = std::env::var("SEALREF_KEY_FILE") {
-        return read_file(Path::new(&path));
+}
+
+/// Every source that is present, in precedence order, named as `info` reports it.
+///
+/// `detect_source` and `ignored_sources` both come from this one list, so what `info` reports as
+/// used and as ignored cannot drift from what `load` actually reads.
+fn present_sources(
+    env: &dyn Fn(&str) -> Option<String>,
+    default_file_exists: bool,
+) -> Vec<(&'static str, KeySource)> {
+    let mut present = Vec::new();
+    if let Some(fd) = env("SEALREF_KEY_FD") {
+        present.push(("SEALREF_KEY_FD", KeySource::Fd(fd)));
     }
-    if Path::new(DEFAULT_KEY_FILE).exists() {
-        return read_file(Path::new(DEFAULT_KEY_FILE));
+    if let Some(path) = env("SEALREF_KEY_FILE") {
+        present.push(("SEALREF_KEY_FILE", KeySource::File(PathBuf::from(path))));
     }
-    if let Ok(inline) = std::env::var("SEALREF_KEY") {
-        return Ok(Zeroizing::new(inline.replace(';', "\n")));
+    if default_file_exists {
+        present.push((DEFAULT_KEY_FILE, KeySource::DefaultFile));
     }
-    Err(Error::NoKeySource)
+    // Only presence is needed, but the lookup copies the keyring text, so the copy is zeroized.
+    if env("SEALREF_KEY").map(Zeroizing::new).is_some() {
+        present.push(("SEALREF_KEY", KeySource::Inline));
+    }
+    present
+}
+
+/// The source `load` reads, if any.
+///
+/// Order: `SEALREF_KEY_FD`, then `SEALREF_KEY_FILE`, then [`DEFAULT_KEY_FILE`] when it exists,
+/// then `SEALREF_KEY`. A variable set to the empty string counts as set. `env` looks a variable up;
+/// taking it as a parameter keeps this testable without touching the process environment.
+pub fn detect_source(
+    env: &dyn Fn(&str) -> Option<String>,
+    default_file_exists: bool,
+) -> Option<KeySource> {
+    present_sources(env, default_file_exists)
+        .into_iter()
+        .next()
+        .map(|(_, source)| source)
+}
+
+/// The sources that are present but outranked by the one `load` reads, in precedence order.
+///
+/// These answer the question "why is my key not being used". The default path is named
+/// [`DEFAULT_KEY_FILE`].
+pub fn ignored_sources(
+    env: &dyn Fn(&str) -> Option<String>,
+    default_file_exists: bool,
+) -> Vec<&'static str> {
+    present_sources(env, default_file_exists)
+        .into_iter()
+        .skip(1)
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// Look a variable up in the process environment the way [`load`] does, for callers that need
+/// [`detect_source`] or [`ignored_sources`] to agree with it.
+pub fn process_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+/// Load the keyring from the first source that is present. See [`detect_source`] for the order.
+pub fn load() -> Result<Keyring> {
+    let source = detect_source(&process_env, Path::new(DEFAULT_KEY_FILE).exists())
+        .ok_or(Error::NoKeySource)?;
+    load_from(&source)
+}
+
+/// Read and parse the keyring from one source.
+pub fn load_from(source: &KeySource) -> Result<Keyring> {
+    let text = match source {
+        KeySource::Fd(fd) => read_fd(fd)?,
+        KeySource::File(path) => read_file(path)?,
+        KeySource::DefaultFile => read_file(Path::new(DEFAULT_KEY_FILE))?,
+        KeySource::Inline => {
+            let inline = Zeroizing::new(process_env("SEALREF_KEY").ok_or(Error::NoKeySource)?);
+            Zeroizing::new(inline.replace(';', "\n"))
+        }
+    };
+    Keyring::parse(&text)
 }
 
 fn read_file(path: &Path) -> Result<Zeroizing<String>> {
@@ -430,6 +571,130 @@ mod tests {
     fn semicolon_separated_text_parses_after_normalisation() {
         let text = format!("k1 {RAW};k2 argon2id:dev-only").replace(';', "\n");
         assert_eq!(Keyring::parse(&text).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_swapped_line_does_not_echo_the_passphrase() {
+        let err = Keyring::parse("argon2id:mypass dev\n").unwrap_err();
+        assert!(matches!(err, Error::KeyringSyntax { line: 1, .. }));
+        let message = err.to_string();
+        assert!(message.contains("invalid key id"), "{message}");
+        assert!(!message.contains("mypass"), "{message}");
+    }
+
+    #[test]
+    fn records_the_form_of_each_key() {
+        let ring = Keyring::parse(&format!("k1 {RAW}\ndev argon2id:dev-only\n")).unwrap();
+        assert_eq!(ring.get("k1").unwrap().form(), KeyForm::Random);
+        assert_eq!(ring.get("dev").unwrap().form(), KeyForm::Argon2id);
+        assert_eq!(KeyForm::Random.to_string(), "random");
+        assert_eq!(KeyForm::Argon2id.to_string(), "argon2id");
+    }
+
+    /// A fingerprint is compared across hosts and releases, so it must never change for a given
+    /// key. These vectors were produced once and are never regenerated.
+    #[test]
+    fn fingerprints_match_frozen_vectors() {
+        let ring = Keyring::parse(&format!(
+            "k1 {RAW}\ndev argon2id:correct horse battery staple\n"
+        ))
+        .unwrap();
+        assert_eq!(ring.get("k1").unwrap().fingerprint(), "f9d9eb43a1454ce3");
+        assert_eq!(ring.get("dev").unwrap().fingerprint(), "29868f8a7931ceaa");
+    }
+
+    #[test]
+    fn a_fingerprint_is_sixteen_hex_characters_and_not_the_key() {
+        let ring = Keyring::parse(&format!("k1 {RAW}")).unwrap();
+        let key = ring.get("k1").unwrap();
+        let fingerprint = key.fingerprint();
+        assert_eq!(fingerprint.len(), 16);
+        assert!(fingerprint
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        let key_hex: String = key.bytes().iter().map(|b| format!("{b:02x}")).collect();
+        assert!(!key_hex.contains(&fingerprint));
+    }
+
+    fn env_of(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| {
+            vars.iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    #[test]
+    fn detects_sources_in_precedence_order() {
+        let all = env_of(&[
+            ("SEALREF_KEY", "k1 x"),
+            ("SEALREF_KEY_FILE", "/k/file"),
+            ("SEALREF_KEY_FD", "3"),
+        ]);
+        assert_eq!(
+            detect_source(&all, true),
+            Some(KeySource::Fd("3".to_string()))
+        );
+        assert_eq!(
+            ignored_sources(&all, true),
+            vec!["SEALREF_KEY_FILE", DEFAULT_KEY_FILE, "SEALREF_KEY"]
+        );
+
+        let file = env_of(&[("SEALREF_KEY_FILE", "/k/file"), ("SEALREF_KEY", "k1 x")]);
+        assert_eq!(
+            detect_source(&file, false),
+            Some(KeySource::File(PathBuf::from("/k/file")))
+        );
+        assert_eq!(ignored_sources(&file, false), vec!["SEALREF_KEY"]);
+
+        let inline = env_of(&[("SEALREF_KEY", "k1 x")]);
+        assert_eq!(detect_source(&inline, true), Some(KeySource::DefaultFile));
+        assert_eq!(ignored_sources(&inline, true), vec!["SEALREF_KEY"]);
+        assert_eq!(detect_source(&inline, false), Some(KeySource::Inline));
+        assert!(ignored_sources(&inline, false).is_empty());
+
+        let none = env_of(&[]);
+        assert_eq!(detect_source(&none, false), None);
+        assert!(ignored_sources(&none, false).is_empty());
+    }
+
+    #[test]
+    fn a_variable_set_to_the_empty_string_is_a_source() {
+        let empty = env_of(&[("SEALREF_KEY_FILE", ""), ("SEALREF_KEY", "k1 x")]);
+        assert_eq!(
+            detect_source(&empty, false),
+            Some(KeySource::File(PathBuf::new()))
+        );
+        assert_eq!(ignored_sources(&empty, false), vec!["SEALREF_KEY"]);
+    }
+
+    #[test]
+    fn key_sources_render_their_names_only() {
+        assert_eq!(
+            KeySource::Fd("3".to_string()).to_string(),
+            "SEALREF_KEY_FD 3"
+        );
+        assert_eq!(
+            KeySource::File(PathBuf::from("/home/app/dev.key")).to_string(),
+            "SEALREF_KEY_FILE /home/app/dev.key"
+        );
+        assert_eq!(
+            KeySource::DefaultFile.to_string(),
+            "/run/secrets/sealref_key (default path)"
+        );
+        assert_eq!(
+            KeySource::Inline.to_string(),
+            "SEALREF_KEY (environment variable)"
+        );
+    }
+
+    #[test]
+    fn loads_from_a_file_source() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("test.key");
+        fs::write(&path, format!("k1 {RAW}\n")).unwrap();
+        let ring = load_from(&KeySource::File(path)).unwrap();
+        assert_eq!(ring.kids().collect::<Vec<_>>(), vec!["k1"]);
     }
 
     #[test]

@@ -7,8 +7,10 @@
 //!
 //! Parsing keeps the source line number of every entry so a failure can point at a line, and it
 //! never rewrites the file: `rewrap` edits the original text in place, so lines this parser does
-//! not care about stay byte-identical.
+//! not care about stay byte-identical. `protect` edits the original text too, which is why every
+//! entry also records where its value sits in that text.
 
+use std::ops::Range;
 use std::path::Path;
 
 use crate::{Error, Result};
@@ -22,13 +24,28 @@ pub struct Entry {
     pub value: String,
     /// 1-based source line.
     pub line: usize,
+    /// Byte range of the value in the whole source text: the unquoted token without surrounding
+    /// whitespace or an inline comment, or the text between the quotes of a quoted value. An
+    /// empty unquoted value has an empty range where the value would start.
+    pub value_span: Range<usize>,
 }
 
 /// Parse dotenv text. `path` is used only for error messages.
 pub fn parse(text: &str, path: &str) -> Result<Vec<Entry>> {
     let mut entries = Vec::new();
-    for (index, raw) in text.lines().enumerate() {
+    let mut next_start = 0usize;
+    // `split_inclusive` rather than `lines`, so the offset of every line in the whole text is
+    // known. Stripping one `\n`, and one `\r` only when a `\n` was stripped, is what `lines` does.
+    for (index, piece) in text.split_inclusive('\n').enumerate() {
         let line = index + 1;
+        let line_start = next_start;
+        next_start += piece.len();
+        let raw = match piece.strip_suffix('\n') {
+            Some(without_newline) => without_newline
+                .strip_suffix('\r')
+                .unwrap_or(without_newline),
+            None => piece,
+        };
         let bad = |reason: &str| Error::Dotenv {
             path: path.to_string(),
             line,
@@ -53,11 +70,14 @@ pub fn parse(text: &str, path: &str) -> Result<Vec<Entry>> {
         if key.chars().any(char::is_whitespace) {
             return Err(bad("the variable name contains whitespace"));
         }
-        let value = parse_value(rest, &bad)?;
+        // `rest` is a suffix of `stripped`, and `stripped` starts at `line_start`.
+        let rest_start = line_start + stripped.len() - rest.len();
+        let (value, span) = parse_value(rest, &bad)?;
         entries.push(Entry {
             key: key.to_string(),
             value,
             line,
+            value_span: rest_start + span.start..rest_start + span.end,
         });
     }
     Ok(entries)
@@ -70,22 +90,30 @@ pub fn parse_file(path: &Path) -> Result<Vec<Entry>> {
     parse(&text, &path.display().to_string())
 }
 
-fn parse_value(rest: &str, bad: &impl Fn(&str) -> Error) -> Result<String> {
-    let rest = rest.trim_start();
-    let mut chars = rest.chars();
+/// Parse the text after `=`, returning the value and its span relative to `rest`.
+fn parse_value(rest: &str, bad: &impl Fn(&str) -> Error) -> Result<(String, Range<usize>)> {
+    let trimmed = rest.trim_start();
+    let start = rest.len() - trimmed.len();
+    let mut chars = trimmed.chars();
     match chars.next() {
         Some('"') => {
-            let (value, remainder) = read_double_quoted(chars.as_str(), bad)?;
+            let body = chars.as_str();
+            let (value, remainder) = read_double_quoted(body, bad)?;
             check_trailer(remainder, bad)?;
-            Ok(value)
+            // `remainder` starts right after the closing quote.
+            let inner = body.len() - remainder.len() - 1;
+            Ok((value, start + 1..start + 1 + inner))
         }
         Some('\'') => {
             let body = chars.as_str();
             let end = body.find('\'').ok_or_else(|| bad("unterminated \" ' \""))?;
             check_trailer(&body[end + 1..], bad)?;
-            Ok(body[..end].to_string())
+            Ok((body[..end].to_string(), start + 1..start + 1 + end))
         }
-        _ => Ok(strip_inline_comment(rest).trim_end().to_string()),
+        _ => {
+            let token = strip_inline_comment(trimmed).trim_end();
+            Ok((token.to_string(), start..start + token.len()))
+        }
     }
 }
 
@@ -263,5 +291,92 @@ mod tests {
     #[test]
     fn rejects_text_after_a_closing_quote() {
         assert!(parse("A=\"v\" junk\n", "test.env").is_err());
+    }
+
+    /// The text the span of the only entry covers.
+    fn spanned(text: &str) -> &str {
+        let entries = parsed(text);
+        assert_eq!(entries.len(), 1, "expected exactly one entry");
+        &text[entries[0].value_span.clone()]
+    }
+
+    #[test]
+    fn spans_a_plain_value() {
+        assert_eq!(spanned("A=value\n"), "value");
+        assert_eq!(parsed("A=value\n")[0].value_span, 2..7);
+    }
+
+    #[test]
+    fn spans_the_text_between_double_quotes() {
+        assert_eq!(spanned("A=\"a \\\"b\\\" c\"\n"), "a \\\"b\\\" c");
+        assert_eq!(spanned("A=\"\"\n"), "");
+        assert_eq!(parsed("A=\"\"\n")[0].value_span, 3..3);
+    }
+
+    #[test]
+    fn spans_the_text_between_single_quotes() {
+        assert_eq!(spanned("A='x # y'\n"), "x # y");
+        assert_eq!(parsed("A=''\n")[0].value_span, 3..3);
+    }
+
+    #[test]
+    fn spans_a_padded_value_without_its_padding() {
+        assert_eq!(spanned("A  =   value   \n"), "value");
+        assert_eq!(spanned("A = \"  padded  \" \n"), "  padded  ");
+    }
+
+    #[test]
+    fn spans_stop_before_an_inline_comment() {
+        assert_eq!(spanned("A=value # note\n"), "value");
+        assert_eq!(spanned("A=value#kept\n"), "value#kept");
+        assert_eq!(spanned("A=\"v\" # note\n"), "v");
+        assert_eq!(spanned("A=\"v\"#note\n"), "v");
+        assert_eq!(spanned("A='v'#note\n"), "v");
+    }
+
+    #[test]
+    fn spans_a_value_after_the_export_prefix() {
+        assert_eq!(spanned("export A=value\n"), "value");
+        assert_eq!(parsed("export A=value\n")[0].value_span, 9..14);
+    }
+
+    #[test]
+    fn spans_an_empty_value_where_the_value_would_start() {
+        assert_eq!(parsed("A=\n")[0].value_span, 2..2);
+        assert_eq!(parsed("A=   \n")[0].value_span, 5..5);
+        assert_eq!(parsed("A=")[0].value_span, 2..2);
+    }
+
+    #[test]
+    fn spans_exclude_crlf_line_endings() {
+        assert_eq!(spanned("A=value\r\n"), "value");
+        assert_eq!(spanned("A=\"v\"\r\n"), "v");
+    }
+
+    #[test]
+    fn a_doubled_carriage_return_is_stripped_as_before() {
+        // `lines` strips "\r\n" and the parser then strips one more "\r", so the value is "1".
+        let entries = parsed("A=1\r\r\n");
+        assert_eq!(entries[0].value, "1");
+        assert_eq!(entries[0].value_span, 2..3);
+    }
+
+    #[test]
+    fn spans_are_offsets_in_the_whole_text() {
+        let text = "# header\r\nA=1\n\nexport  B = 'two' # note\r\nC=\"three\"";
+        let entries = parsed(text);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(&text[entries[0].value_span.clone()], "1");
+        assert_eq!(&text[entries[1].value_span.clone()], "two");
+        assert_eq!(&text[entries[2].value_span.clone()], "three");
+        assert_eq!(entries[1].line, 4);
+        assert_eq!(entries[2].value_span, text.len() - 6..text.len() - 1);
+    }
+
+    #[test]
+    fn a_comment_marker_right_after_the_equals_sign_is_part_of_the_value() {
+        // Leading whitespace is trimmed first, so the `#` sits at index 0 and is not a comment.
+        assert_eq!(value_of("A= # note\n"), "# note");
+        assert_eq!(spanned("A= # note\n"), "# note");
     }
 }

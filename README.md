@@ -85,11 +85,16 @@ docker run --rm -v "$PWD":/w sealref:0.2.0 check /w/x.env
 sealref keygen > ~/.config/sealref/dev.key
 export SEALREF_KEY_FILE=~/.config/sealref/dev.key
 
-# 2. Seal a secret. The plaintext arrives on stdin, never as an argument.
-printf '%s' 'my-password' | sealref seal
-seal:v1:k20260829:qIb7Q9...
+# 2. Write the env file as usual, plaintext included.
+cat .env
+DB_HOST=localhost
+DB_PASSWORD=my-password
 
-# 3. Put the reference in the env file and commit it.
+# 3. Seal every secret-looking value in place, then commit the file.
+sealref protect .env
+OK DB_HOST plaintext
+SEALED DB_PASSWORD kid=k20260829
+.env 1
 cat .env
 DB_HOST=localhost
 DB_PASSWORD=seal:v1:k20260829:qIb7Q9...
@@ -97,6 +102,19 @@ DB_PASSWORD=seal:v1:k20260829:qIb7Q9...
 # 4. Run the application with the reference resolved.
 sealref exec --env-file .env -- ./myapp
 ```
+
+To seal one value on its own, pipe it to `sealref seal`. The plaintext arrives on stdin, never as
+an argument:
+
+```bash
+printf '%s' 'my-password' | sealref seal
+seal:v1:k20260829:qIb7Q9...
+```
+
+Run `sealref check --require-sealed .env` before every commit, ideally as a pre-commit hook, so a
+plaintext secret never reaches the repository in the first place. `protect` only rewrites the file
+as it is now: it does not remove plaintext that is already in git history, in editor backups or
+in old disk blocks. A secret that was ever committed in plaintext must be rotated.
 
 In production the same `.env` line can point at Vault instead, and step 4 does not change:
 
@@ -199,8 +217,9 @@ guesses the key. Production keyrings must hold random keys from `sealref keygen`
 ## Commands
 
 Global flags: `--version`, and `-q` / `--quiet` to suppress informational output on stdout.
-Errors go to stderr with exit code 1. `check` uses exit code 2 for a policy failure. No command
-ever prints a plaintext secret in a log or an error message.
+Errors go to stderr with exit code 1. `check` uses exit code 2 for a policy failure, and `info`
+uses exit code 2 when a keyring source is set but cannot be loaded. No command ever prints a
+plaintext secret in a log or an error message.
 
 ### `sealref keygen [--kid <kid>]`
 
@@ -326,6 +345,40 @@ sealref check --require-sealed --pattern '^LICENSE_' production.env
 FAIL DB_PASSWORD plaintext
 ```
 
+### `sealref protect [--kid <kid>] [--all] [--pattern <regex>]... <file>...`
+
+Seals every plaintext secret in each dotenv file, in place, so an admin can write the password
+into `.env`, run one command, and commit. A value is sealed when `check --require-sealed` would
+fail it as plaintext: a non-empty plaintext under a secret-looking name, with the same default
+patterns and the same `--pattern` extras. `--all` seals every non-empty plaintext value instead.
+That makes `check --require-sealed` the dry run for `protect`. Without `--kid` the first key in
+the keyring is used, and the keyring is only loaded when something actually needs sealing, so
+running it over a file that is already protected needs no key and changes nothing.
+
+```bash
+sealref protect production.env
+OK DB_HOST plaintext
+SEALED DB_PASSWORD kid=prod-a
+OK SMTP_PASSWORD vault secret/myapp/smtp#password
+SEALED API_TOKEN kid=prod-a
+production.env 2
+```
+
+What is sealed is the value `exec` would hand to the application: quotes removed and escapes
+applied. A quoted value keeps its quotes around the new reference, and every other byte of the
+file, comments, `export` prefixes, spacing and line endings included, is unchanged. Note that
+`KEY= # note` is not an empty value followed by a comment: the value is the text `# note`, so that
+is what gets sealed. Every file is processed in memory first and nothing is written unless all of
+them transform, so a malformed `seal:` reference in any one of them leaves all of them untouched.
+An I/O failure while the results are being written can still leave the files before it already
+protected; that state is a valid one, and running the command again is safe.
+
+It will not touch a file that holds `{{seal:...}}` placeholders: it handles dotenv files only,
+and a bare reference written into an INI or YAML file is one nothing would resolve. Like `rewrap`,
+it writes through a temporary file and a rename, so a symlinked `.env` is replaced by a regular
+file. And it only changes the file as it is now; see the note under
+[Quick start](#quick-start) about plaintext that was already committed.
+
 ### `sealref rewrap --from <kid> --to <kid> <file>...`
 
 Re-encrypts every `seal:v1:<from>:...` reference in each file under `<to>`, in place, and prints
@@ -338,6 +391,28 @@ sealref rewrap --from k20260101 --to k20260829 production.env config.ini.templat
 production.env 3
 config.ini.template 1
 ```
+
+### `sealref info`
+
+Shows the effective keyring: which source it comes from, which other sources are set but
+outranked, and every key by id, form and fingerprint. It answers "why is my key not the one being
+used" without revealing anything: no key, no passphrase and no keyring text is ever printed.
+
+```bash
+sealref info
+sealref 0.2.0
+keyring: SEALREF_KEY_FILE /home/app/dev.key
+  ignored: SEALREF_KEY (a higher-precedence source is set)
+  k20260829  random    fingerprint 8f3c2a1e9b0d4c77  default for seal
+  dev        argon2id  fingerprint 1a2b3c4d5e6f7081
+```
+
+The form is `random` for a base64 key line and `argon2id` for a passphrase line. The fingerprint
+is the first 8 bytes of `SHA-256("sealref:fingerprint:" || key)` in hex, so two hosts can confirm
+they hold the same key by comparing it. No keyring at all is not an error, since a deployment that
+only uses remote references has none; a source that is set but cannot be read or parsed is
+reported with its error and exits 2. `--quiet` does not apply, because this output is the result.
+It does not report providers or TLS settings.
 
 ## Docker
 
@@ -632,6 +707,8 @@ Source layout:
 | `resolve` | Dispatch to the provider that owns a reference. |
 | `exec` | Environment assembly and process handover. |
 | `check` | The reporting and policy gate. |
+| `protect` | In-place sealing of plaintext secrets in a dotenv file. |
+| `info` | The keyring report. |
 
 ## Contributing
 

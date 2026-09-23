@@ -11,9 +11,11 @@ use zeroize::Zeroizing;
 
 use sealref::check::Checker;
 use sealref::exec::{split_template_spec, ExecOptions};
+use sealref::info::Info;
+use sealref::protect::Protector;
 use sealref::reference::Reference;
 use sealref::resolve::Resolver;
-use sealref::{crypto, template, utc_date_stamp, Error, Result};
+use sealref::{crypto, keyring, template, utc_date_stamp, Error, Result};
 
 #[derive(Parser)]
 #[command(
@@ -125,6 +127,25 @@ enum Command {
         pattern: Vec<String>,
     },
 
+    /// Seal every plaintext secret in a dotenv file, in place.
+    Protect {
+        /// Key id to seal under. Defaults to the first key in the keyring.
+        #[arg(long)]
+        kid: Option<String>,
+
+        /// Seal every non-empty plaintext value, not only secret-looking names.
+        #[arg(long)]
+        all: bool,
+
+        /// An extra case-insensitive name pattern treated as secret-looking. Repeatable.
+        #[arg(long = "pattern", value_name = "REGEX")]
+        pattern: Vec<String>,
+
+        /// The dotenv files to rewrite.
+        #[arg(required = true, value_name = "FILE")]
+        files: Vec<PathBuf>,
+    },
+
     /// Re-encrypt every seal:v1 reference from one key id to another, in place.
     Rewrap {
         /// The key id currently protecting the references.
@@ -139,6 +160,9 @@ enum Command {
         #[arg(required = true, value_name = "FILE")]
         files: Vec<PathBuf>,
     },
+
+    /// Show the effective keyring: its source, its key ids and their fingerprints.
+    Info,
 }
 
 fn main() -> ExitCode {
@@ -174,7 +198,14 @@ fn run(cli: Cli) -> Result<i32> {
             require_sealed,
             pattern,
         } => check(env_file, files, require_sealed, pattern, cli.quiet),
+        Command::Protect {
+            kid,
+            all,
+            pattern,
+            files,
+        } => protect(kid.as_deref(), all, &pattern, &files, cli.quiet),
         Command::Rewrap { from, to, files } => rewrap(&from, &to, &files, cli.quiet),
+        Command::Info => info(),
     }
 }
 
@@ -307,6 +338,61 @@ fn check(
     Ok(report.exit_code())
 }
 
+fn protect(
+    kid: Option<&str>,
+    all: bool,
+    patterns: &[String],
+    files: &[PathBuf],
+    quiet: bool,
+) -> Result<i32> {
+    let protector = Protector::new(all, patterns)?;
+    // The resolver loads the keyring on the first value that needs sealing, so a file that is
+    // already protected needs no keyring at all.
+    let mut resolver = Resolver::new();
+    let mut results = Vec::with_capacity(files.len());
+    // Every file is transformed before any is written, so one bad file leaves all of them as
+    // they were.
+    for path in files {
+        let text = Zeroizing::new(template::read_text(path)?);
+        let protected = protector
+            .protect_text(&text, |plaintext| {
+                let keyring = resolver.keyring()?;
+                let key = match kid {
+                    Some(kid) => keyring.get(kid)?,
+                    None => keyring.default_key()?,
+                };
+                crypto::seal(key.bytes(), key.kid(), plaintext)
+            })
+            .map_err(|e| e.at(path.display().to_string()))?;
+        results.push(protected);
+    }
+    for (path, protected) in files.iter().zip(&results) {
+        if protected.sealed > 0 {
+            replace_file(path, &protected.text)?;
+        }
+    }
+    if !quiet {
+        for (path, protected) in files.iter().zip(&results) {
+            for line in &protected.lines {
+                println!("{line}");
+            }
+            println!("{} {}", path.display(), protected.sealed);
+        }
+    }
+    Ok(0)
+}
+
+fn info() -> Result<i32> {
+    let default_file_exists = Path::new(keyring::DEFAULT_KEY_FILE).exists();
+    let source = keyring::detect_source(&keyring::process_env, default_file_exists);
+    let ignored = keyring::ignored_sources(&keyring::process_env, default_file_exists);
+    let loaded = source.as_ref().map(keyring::load_from);
+    let report = Info::new(env!("CARGO_PKG_VERSION"), source, ignored, loaded);
+    // Printed even under --quiet: this output is the command's result.
+    print!("{report}");
+    Ok(report.exit_code())
+}
+
 fn rewrap(from: &str, to: &str, files: &[PathBuf], quiet: bool) -> Result<i32> {
     let mut resolver = Resolver::new();
     let keyring = resolver.keyring()?;
@@ -352,10 +438,10 @@ fn replace_file(path: &Path, contents: &str) -> Result<()> {
 
     let result = (|| -> Result<()> {
         // The temporary file is created owner-only and then widened to the original's permissions,
-        // rather than created at the umask and narrowed afterwards. Rewrapped text holds
-        // ciphertext rather than plaintext, but a file that is briefly world-readable while it is
-        // being written is not a habit worth having in this tool. It must also not already exist:
-        // a leftover from a crashed run and a planted symlink look the same from here.
+        // rather than created at the umask and narrowed afterwards. Rewrapped and protected text
+        // holds ciphertext where the secrets were, but a file that is briefly world-readable while
+        // it is being written is not a habit worth having in this tool. It must also not already
+        // exist: a leftover from a crashed run and a planted symlink look the same from here.
         sealref::exec::create_private(&temporary, contents.as_bytes())?;
         let permissions = std::fs::metadata(path)
             .map_err(|e| Error::io(path.display().to_string(), e))?
