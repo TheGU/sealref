@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sealref protect <file>...` seals every plaintext secret in a dotenv file in place: the values
+  `check --require-sealed` would fail, or every non-empty plaintext value with `--all`. Quotes,
+  comments, `export` prefixes and line endings are kept, the keyring is only loaded when something
+  needs sealing, and no file is written unless every file transforms. Files that hold
+  `{{seal:...}}` placeholders are refused.
+- `sealref info` shows the effective keyring: the source in use, the sources it outranks, and each
+  key by id, form (`random` or `argon2id`) and fingerprint, without printing any key material. It
+  exits 2 when a keyring source is set but cannot be loaded.
+
 ### Changed
 
 - Random bytes for nonces and `keygen` come straight from `getrandom`, which the cipher and the
@@ -18,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Mozilla bundle was already the 1.x one and is still compiled in once.
 - A failure of the operating system random number generator is reported as such rather than
   aborting the process.
+
+### Fixed
+
+- A keyring line with an invalid key id no longer echoes that text in the error. On a line written
+  the wrong way round, such as `argon2id:<passphrase> dev`, the text was the passphrase.
 
 ## [0.2.0] - 2026-09-17
 

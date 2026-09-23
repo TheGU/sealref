@@ -609,6 +609,319 @@ fn rewrap_fails_before_touching_a_file_when_a_key_is_missing() {
     assert_eq!(fs::read_to_string(&env_file).unwrap(), contents);
 }
 
+/// Every `seal:v1` token in a text, in order.
+fn v1_tokens(text: &str) -> Vec<String> {
+    sealref::template::v1_tokens(text)
+        .into_iter()
+        .map(|t| t.text)
+        .collect()
+}
+
+/// The parsed value of one variable in a dotenv file.
+fn dotenv_value(path: &Path, name: &str) -> String {
+    sealref::dotenv::parse_file(path)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.key == name)
+        .unwrap_or_else(|| panic!("{name} is in the file"))
+        .value
+}
+
+fn unsealed(reference: &str) -> String {
+    let output = sealref()
+        .args(["unseal", "--ref", reference])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    String::from_utf8(output).unwrap()
+}
+
+#[test]
+fn protect_seals_secret_names_and_they_unseal_to_the_original_bytes() {
+    let dir = TempDir::new().unwrap();
+    let env_file = write(
+        &dir,
+        "app.env",
+        "DB_HOST=db01\nDB_PASSWORD=hunter2\nAPI_TOKEN=\"say \\\"hi\\\"\\tnow\"\nCLIENT_SECRET='literal\\n # not a comment'\nLOG_LEVEL=info\n",
+    );
+    sealref()
+        .args(["protect", &path_arg(&env_file)])
+        .assert()
+        .success()
+        .stdout(format!(
+            "OK DB_HOST plaintext\nSEALED DB_PASSWORD kid=k1\nSEALED API_TOKEN kid=k1\nSEALED CLIENT_SECRET kid=k1\nOK LOG_LEVEL plaintext\n{} 3\n",
+            path_arg(&env_file)
+        ));
+    assert_eq!(dotenv_value(&env_file, "DB_HOST"), "db01");
+    assert_eq!(dotenv_value(&env_file, "LOG_LEVEL"), "info");
+    assert_eq!(unsealed(&dotenv_value(&env_file, "DB_PASSWORD")), "hunter2");
+    assert_eq!(
+        unsealed(&dotenv_value(&env_file, "API_TOKEN")),
+        "say \"hi\"\tnow"
+    );
+    assert_eq!(
+        unsealed(&dotenv_value(&env_file, "CLIENT_SECRET")),
+        "literal\\n # not a comment"
+    );
+}
+
+#[test]
+fn protect_keeps_every_other_byte_of_the_file() {
+    let dir = TempDir::new().unwrap();
+    let original = "# an app env file\r\nDB_HOST=db01\r\nexport DB_PASSWORD =  hunter2   # rotate monthly\r\nAPI_TOKEN=\"tok\"#note\r\nCLIENT_SECRET='single'\r\nEMPTY_PASSWORD=\r\nLOG_LEVEL=info\r\n\r\n# trailing comment\r\n";
+    let env_file = write(&dir, "app.env", original);
+    sealref()
+        .args(["protect", "--kid", "k2", &path_arg(&env_file)])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SEALED DB_PASSWORD kid=k2"));
+
+    let rewritten = fs::read_to_string(&env_file).unwrap();
+    let tokens = v1_tokens(&rewritten);
+    assert_eq!(tokens.len(), 3);
+    assert!(tokens.iter().all(|t| t.starts_with("seal:v1:k2:")));
+    assert_eq!(
+        rewritten,
+        format!(
+            "# an app env file\r\nDB_HOST=db01\r\nexport DB_PASSWORD =  {}   # rotate monthly\r\nAPI_TOKEN=\"{}\"#note\r\nCLIENT_SECRET='{}'\r\nEMPTY_PASSWORD=\r\nLOG_LEVEL=info\r\n\r\n# trailing comment\r\n",
+            tokens[0], tokens[1], tokens[2]
+        )
+    );
+    assert_eq!(unsealed(&tokens[0]), "hunter2");
+    assert_eq!(unsealed(&tokens[1]), "tok");
+    assert_eq!(unsealed(&tokens[2]), "single");
+    assert_eq!(dotenv_value(&env_file, "API_TOKEN"), tokens[1]);
+}
+
+#[test]
+fn protect_twice_changes_nothing_the_second_time() {
+    let dir = TempDir::new().unwrap();
+    let env_file = write(&dir, "app.env", "DB_PASSWORD=hunter2\nLOG_LEVEL=info\n");
+    sealref()
+        .args(["protect", &path_arg(&env_file)])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(" 1\n"));
+    let once = fs::read_to_string(&env_file).unwrap();
+    sealref()
+        .args(["protect", &path_arg(&env_file)])
+        .assert()
+        .success()
+        .stdout(format!(
+            "OK DB_PASSWORD sealed kid=k1\nOK LOG_LEVEL plaintext\n{} 0\n",
+            path_arg(&env_file)
+        ));
+    assert_eq!(fs::read_to_string(&env_file).unwrap(), once);
+}
+
+#[test]
+fn protect_all_seals_every_plaintext_and_pattern_widens_the_names() {
+    let dir = TempDir::new().unwrap();
+    let env_file = write(&dir, "app.env", "LICENSE_BLOB=abc\nLOG_LEVEL=info\n");
+    sealref()
+        .args(["protect", &path_arg(&env_file)])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(" 0\n"));
+    sealref()
+        .args(["protect", "--pattern", "^LICENSE_", &path_arg(&env_file)])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SEALED LICENSE_BLOB kid=k1"))
+        .stdout(predicate::str::contains("OK LOG_LEVEL plaintext"));
+    assert_eq!(dotenv_value(&env_file, "LOG_LEVEL"), "info");
+    sealref()
+        .args(["protect", "--all", &path_arg(&env_file)])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SEALED LOG_LEVEL kid=k1"));
+    assert_eq!(unsealed(&dotenv_value(&env_file, "LICENSE_BLOB")), "abc");
+    assert_eq!(unsealed(&dotenv_value(&env_file, "LOG_LEVEL")), "info");
+}
+
+#[test]
+fn protect_never_prints_the_plaintext_and_quiet_prints_nothing() {
+    let dir = TempDir::new().unwrap();
+    let env_file = write(&dir, "app.env", "DB_PASSWORD=hunter2\n");
+    sealref()
+        .args(["protect", "--all", &path_arg(&env_file)])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hunter2").not())
+        .stderr("");
+
+    let env_file = write(&dir, "quiet.env", "DB_PASSWORD=hunter2\n");
+    sealref()
+        .args(["-q", "protect", &path_arg(&env_file)])
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("");
+    assert!(!fs::read_to_string(&env_file).unwrap().contains("hunter2"));
+}
+
+#[test]
+fn protect_writes_no_file_when_one_reference_is_malformed() {
+    let dir = TempDir::new().unwrap();
+    let good = write(&dir, "good.env", "DB_PASSWORD=hunter2\n");
+    let bad = write(
+        &dir,
+        "bad.env",
+        "OTHER_PASSWORD=plain\nAPI_TOKEN=seal:v1:k1:!!!\n",
+    );
+    sealref()
+        .args(["protect", &path_arg(&good), &path_arg(&bad)])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains(format!(
+            "{}: line 2: API_TOKEN: ",
+            path_arg(&bad)
+        )))
+        .stderr(predicate::str::contains("hunter2").not())
+        .stderr(predicate::str::contains("plain\n").not());
+    assert_eq!(fs::read_to_string(&good).unwrap(), "DB_PASSWORD=hunter2\n");
+    assert_eq!(
+        fs::read_to_string(&bad).unwrap(),
+        "OTHER_PASSWORD=plain\nAPI_TOKEN=seal:v1:k1:!!!\n"
+    );
+}
+
+#[test]
+fn protect_refuses_a_template() {
+    let dir = TempDir::new().unwrap();
+    let contents = "[db]\npassword = hunter2\ntoken = {{seal:vault:secret/app#token}}\n";
+    let template = write(&dir, "app.ini", contents);
+    sealref()
+        .args(["protect", &path_arg(&template)])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(format!(
+            "{}: protect handles dotenv files only",
+            path_arg(&template)
+        )))
+        .stderr(predicate::str::contains("hunter2").not());
+    assert_eq!(fs::read_to_string(&template).unwrap(), contents);
+}
+
+#[test]
+fn protect_needs_a_keyring_only_when_something_needs_sealing() {
+    let dir = TempDir::new().unwrap();
+    let plaintext = write(&dir, "plain.env", "DB_PASSWORD=hunter2\n");
+    sealref_without_keys()
+        .args(["protect", &path_arg(&plaintext)])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("no key source"));
+    assert_eq!(
+        fs::read_to_string(&plaintext).unwrap(),
+        "DB_PASSWORD=hunter2\n"
+    );
+
+    let sealed = seal_value("k1", "hunter2");
+    let contents =
+        format!("DB_PASSWORD={sealed}\nAPI_TOKEN=seal:vault:secret/app#token\nLOG_LEVEL=info\n");
+    let protected = write(&dir, "sealed.env", &contents);
+    sealref_without_keys()
+        .args(["protect", &path_arg(&protected)])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(" 0\n"));
+    assert_eq!(fs::read_to_string(&protected).unwrap(), contents);
+}
+
+#[test]
+fn info_lists_the_keys_without_their_material() {
+    sealref()
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(format!(
+            "sealref {}\nkeyring: SEALREF_KEY (environment variable)\n",
+            env!("CARGO_PKG_VERSION")
+        )))
+        .stdout(predicate::str::contains(
+            "  k1   random    fingerprint f9d9eb43a1454ce3  default for seal\n",
+        ))
+        .stdout(predicate::str::contains("  k2   random    fingerprint "))
+        .stdout(predicate::str::contains("  dev  argon2id  fingerprint "))
+        .stdout(predicate::str::contains("ignored").not())
+        .stdout(predicate::str::contains(KEY_A).not())
+        .stdout(predicate::str::contains(KEY_B).not())
+        .stdout(predicate::str::contains("development-only-passphrase").not());
+}
+
+#[test]
+fn info_ignores_quiet() {
+    sealref()
+        .args(["-q", "info"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("keyring: SEALREF_KEY"));
+}
+
+#[test]
+fn info_without_a_keyring_says_none_and_succeeds() {
+    sealref_without_keys()
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("keyring: none"));
+}
+
+#[test]
+fn info_with_an_unparsable_keyring_file_exits_two() {
+    let dir = TempDir::new().unwrap();
+    let keyfile = write(&dir, "broken.key", "k1 not-a-key\n");
+    Command::cargo_bin("sealref")
+        .unwrap()
+        .env_remove("SEALREF_KEY_FD")
+        .env_remove("SEALREF_KEY")
+        .env("SEALREF_KEY_FILE", path_arg(&keyfile))
+        .arg("info")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(format!(
+            "keyring: SEALREF_KEY_FILE {}: keyring line 1: ",
+            path_arg(&keyfile)
+        )))
+        .stdout(predicate::str::contains("not-a-key").not());
+}
+
+#[test]
+fn info_names_the_file_and_lists_the_ignored_variable() {
+    let dir = TempDir::new().unwrap();
+    let keyfile = write(&dir, "sealref.key", &format!("file-key {KEY_B}\n"));
+    sealref()
+        .env("SEALREF_KEY_FILE", path_arg(&keyfile))
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "keyring: SEALREF_KEY_FILE {}\n  ignored: SEALREF_KEY (a higher-precedence source is set)\n  file-key  random    fingerprint ",
+            path_arg(&keyfile)
+        )))
+        .stdout(predicate::str::contains(" k1 ").not())
+        .stdout(predicate::str::contains(KEY_B).not());
+}
+
+#[test]
+fn info_does_not_print_a_passphrase_from_a_swapped_line() {
+    sealref_without_keys()
+        .env("SEALREF_KEY", "argon2id:swapped-passphrase dev")
+        .arg("info")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("invalid key id"))
+        .stdout(predicate::str::contains("swapped-passphrase").not())
+        .stderr(predicate::str::contains("swapped-passphrase").not());
+}
+
 /// A command that prints one environment variable, spelled for the host shell.
 fn echo_command(variable: &str) -> Vec<String> {
     #[cfg(windows)]
@@ -897,11 +1210,36 @@ fn key_material_never_appears_in_output() {
         .success()
         .get_output()
         .clone();
-    let combined = format!(
+    let mut combined = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+
+    let dir = TempDir::new().unwrap();
+    let env_file = write(&dir, "app.env", "DB_PASSWORD=hunter2\nLOG_LEVEL=info\n");
+    let bad_file = write(&dir, "bad.env", "DB_PASSWORD=seal:v1:k1:!!!\n");
+    let runs = [
+        sealref().arg("info").output().unwrap(),
+        sealref()
+            .args(["protect", "--all", &path_arg(&env_file)])
+            .output()
+            .unwrap(),
+        sealref()
+            .args(["protect", &path_arg(&bad_file)])
+            .output()
+            .unwrap(),
+    ];
+    // `unseal` prints the plaintext by design; `info` and `protect` must never print it.
+    let mut info_and_protect = String::new();
+    for run in &runs {
+        info_and_protect.push_str(&String::from_utf8_lossy(&run.stdout));
+        info_and_protect.push_str(&String::from_utf8_lossy(&run.stderr));
+    }
+    assert!(!info_and_protect.contains("hunter2"));
+    combined.push_str(&info_and_protect);
+
     assert!(!combined.contains(KEY_A));
     assert!(!combined.contains(KEY_B));
+    assert!(!combined.contains("development-only-passphrase"));
 }
