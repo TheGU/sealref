@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Random bytes for nonces and `keygen` come straight from `getrandom`, which the cipher and the
+  password hash already pull in, rather than through `rand`. `rand` 0.10 renamed the operating
+  system generator and the trait behind it, and nothing here needed more than one call to fill a
+  buffer. The dependency tree loses `rand`, `rand_chacha`, `rand_core` 0.6, `ppv-lite86`,
+  `zerocopy` and one `syn`.
+- `webpki-roots` moves to 1.x. 0.26.11, the version already locked, is a shim over 1.x, so the
+  Mozilla bundle was already the 1.x one and is still compiled in once.
+- A failure of the operating system random number generator is reported as such rather than
+  aborting the process.
+
 ## [0.2.0] - 2026-09-17
 
 ### Added

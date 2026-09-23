@@ -68,6 +68,9 @@ pub enum Error {
     #[error("encryption failed")]
     EncryptFailed,
 
+    #[error("the operating system random number generator failed: {0}")]
+    Rng(String),
+
     #[error("the resolved value is not valid UTF-8")]
     NotUtf8,
 
@@ -111,6 +114,11 @@ impl Error {
             context: context.into(),
             source,
         }
+    }
+
+    /// Wrap a failure of the operating system random number generator.
+    pub fn rng(source: getrandom::Error) -> Self {
+        Error::Rng(source.to_string())
     }
 
     /// Attach the name of the variable, placeholder or file position being resolved.

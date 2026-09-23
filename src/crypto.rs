@@ -7,8 +7,6 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
-use rand::rngs::OsRng;
-use rand::RngCore;
 use zeroize::Zeroizing;
 
 use crate::reference::{self, NONCE_LEN};
@@ -26,7 +24,7 @@ pub fn seal(key: &[u8; 32], kid: &str, plaintext: &[u8]) -> Result<String> {
     }
     let cipher = XChaCha20Poly1305::new(<&Key>::from(key));
     let mut nonce = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce);
+    getrandom::fill(&mut nonce).map_err(Error::rng)?;
     let aad = associated_data(kid);
     let ciphertext = cipher
         .encrypt(
@@ -80,10 +78,10 @@ pub fn open_string(key: &[u8; 32], kid: &str, blob: &[u8]) -> Result<Zeroizing<S
 }
 
 /// 32 fresh bytes from the operating system CSPRNG.
-pub fn random_key() -> Zeroizing<[u8; 32]> {
+pub fn random_key() -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0u8; 32]);
-    OsRng.fill_bytes(&mut *key);
-    key
+    getrandom::fill(&mut *key).map_err(Error::rng)?;
+    Ok(key)
 }
 
 #[cfg(test)]
@@ -174,7 +172,7 @@ mod tests {
 
     #[test]
     fn random_keys_differ() {
-        assert_ne!(*random_key(), *random_key());
+        assert_ne!(*random_key().unwrap(), *random_key().unwrap());
     }
 
     /// A reference sealed by an earlier release must still open.

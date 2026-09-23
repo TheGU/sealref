@@ -183,7 +183,7 @@ fn keygen(kid: Option<String>) -> Result<i32> {
     if !sealref::reference::is_valid_kid(&kid) {
         return Err(Error::InvalidKid(kid));
     }
-    let key = crypto::random_key();
+    let key = crypto::random_key()?;
     println!("{kid} {}", URL_SAFE_NO_PAD.encode(*key));
     Ok(0)
 }
