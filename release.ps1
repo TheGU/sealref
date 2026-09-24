@@ -65,6 +65,9 @@ try {
     Invoke-Native git @('fetch', '--quiet', 'origin', 'main')
     $behind = [int](git rev-list --count HEAD..origin/main)
     if ($behind -gt 0) { throw "main is $behind commit(s) behind origin/main; pull first" }
+    # The push that follows would carry any local commit into the release unreviewed.
+    $ahead = [int](git rev-list --count origin/main..HEAD)
+    if ($ahead -gt 0) { throw "main has $ahead commit(s) not on origin/main; release only what is merged" }
 
     git rev-parse --quiet --verify "refs/tags/$Tag" | Out-Null
     if ($LASTEXITCODE -eq 0) { throw "tag $Tag already exists locally" }
@@ -90,9 +93,14 @@ try {
     $cargo = $null
     if (Get-Command cargo -ErrorAction SilentlyContinue) {
         $pattern = '^' + [regex]::Escape($msrv) + '[.-]'
-        if ((Get-Command rustup -ErrorAction SilentlyContinue) -and
-            (rustup toolchain list | Where-Object { $_ -match $pattern })) {
-            $cargo = @{ Exe = 'cargo'; Prefix = @("+$msrv") }
+        $toolchain = $null
+        if (Get-Command rustup -ErrorAction SilentlyContinue) {
+            # rustup lists "1.88.0-x86_64-pc-windows-msvc"; "+1.88" would name a different toolchain.
+            $toolchain = rustup toolchain list | Where-Object { $_ -match $pattern } |
+                Select-Object -First 1 | ForEach-Object { ($_ -split '\s+')[0] }
+        }
+        if ($toolchain) {
+            $cargo = @{ Exe = 'cargo'; Prefix = @("+$toolchain") }
         }
         elseif ((cargo --version) -match "^cargo $([regex]::Escape($msrv))\.") {
             $cargo = @{ Exe = 'cargo'; Prefix = @() }
@@ -112,6 +120,8 @@ try {
 
     # --- Edits ---
 
+    # Restored in finally rather than catch, so Ctrl+C during cargo also leaves a clean tree.
+    $committed = $false
     try {
         $cargoToml = ([regex]'(?m)^version\s*=\s*"[^"]+"').Replace($cargoToml, "version = `"$version`"", 1)
         Write-Text 'Cargo.toml' $cargoToml
@@ -144,14 +154,21 @@ try {
 
         Invoke-Native git (@('add', '--') + $touched)
         Invoke-Native git @('commit', '--quiet', '-m', "Release $Tag")
+        $committed = $true
     }
-    catch {
-        Write-Host 'restoring the release files after the failure'
-        git restore --staged --worktree -- @touched
-        throw
+    finally {
+        if (-not $committed) {
+            Write-Host 'restoring the release files after the failure'
+            git restore --staged --worktree -- @touched
+        }
     }
 
-    Invoke-Native git @('tag', '-a', $Tag, '-m', "sealref $version")
+    try {
+        Invoke-Native git @('tag', '-a', $Tag, '-m', "sealref $version")
+    }
+    catch {
+        throw "the release commit is made but tagging failed ($_). Tag it with: git tag -a $Tag -m `"sealref $version`""
+    }
 
     Write-Host ''
     git show --stat --oneline HEAD
