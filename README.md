@@ -51,10 +51,10 @@ From a release, which carries a prebuilt binary for Linux, Windows and macOS wit
 beside each archive:
 
 ```bash
-curl -fsSLO https://github.com/TheGU/sealref/releases/download/v0.2.0/sealref-v0.2.0-x86_64-unknown-linux-musl.tar.gz
-curl -fsSL  https://github.com/TheGU/sealref/releases/download/v0.2.0/sealref-v0.2.0-x86_64-unknown-linux-musl.tar.gz.sha256   | tr -d '
-' | sed 's/$/  sealref-v0.2.0-x86_64-unknown-linux-musl.tar.gz/' | sha256sum -c -
-tar -xzf sealref-v0.2.0-x86_64-unknown-linux-musl.tar.gz
+curl -fsSLO https://github.com/TheGU/sealref/releases/download/v0.2.4/sealref-v0.2.4-x86_64-unknown-linux-musl.tar.gz
+curl -fsSL  https://github.com/TheGU/sealref/releases/download/v0.2.4/sealref-v0.2.4-x86_64-unknown-linux-musl.tar.gz.sha256   | tr -d '
+' | sed 's/$/  sealref-v0.2.4-x86_64-unknown-linux-musl.tar.gz/' | sha256sum -c -
+tar -xzf sealref-v0.2.4-x86_64-unknown-linux-musl.tar.gz
 ```
 
 As a container image, which builds a static `x86_64-unknown-linux-musl` binary and ships it in a
@@ -62,20 +62,20 @@ As a container image, which builds a static `x86_64-unknown-linux-musl` binary a
 another Dockerfile's `COPY --from` needs:
 
 ```bash
-docker run --rm ghcr.io/thegu/sealref:0.2.0 --version
+docker run --rm ghcr.io/thegu/sealref:0.2.4 --version
 ```
 
 To build the same image yourself:
 
 ```bash
-docker build -t sealref:0.2.0 .
-docker run --rm sealref:0.2.0 --version
+docker build -t sealref:0.2.4 .
+docker run --rm sealref:0.2.4 --version
 ```
 
 You can use the image without installing anything, for example to check an env file in CI:
 
 ```bash
-docker run --rm -v "$PWD":/w sealref:0.2.0 check /w/x.env
+docker run --rm -v "$PWD":/w sealref:0.2.4 check /w/x.env
 ```
 
 ## Quick start
@@ -400,7 +400,7 @@ used" without revealing anything: no key, no passphrase and no keyring text is e
 
 ```bash
 sealref info
-sealref 0.2.0
+sealref 0.2.4
 keyring: SEALREF_KEY_FILE /home/app/dev.key
   ignored: SEALREF_KEY (a higher-precedence source is set)
   k20260829  random    fingerprint 8f3c2a1e9b0d4c77  default for seal
@@ -421,7 +421,7 @@ It does not report providers or TLS settings.
 ```dockerfile
 FROM quay.io/keycloak/keycloak:latest
 
-COPY --from=ghcr.io/thegu/sealref:0.2.0 /sealref /usr/local/bin/sealref
+COPY --from=ghcr.io/thegu/sealref:0.2.4 /sealref /usr/local/bin/sealref
 
 ENTRYPOINT ["sealref", "exec", "--"]
 CMD ["/opt/keycloak/bin/kc.sh", "start"]
@@ -461,16 +461,16 @@ KC_DB_PASSWORD=seal:vault:secret/keycloak/prod/database#password
 ### Checking a file without installing anything
 
 ```bash
-docker run --rm -v "$PWD":/w sealref:0.2.0 check /w/x.env
-docker run --rm -v "$PWD":/w sealref:0.2.0 check --require-sealed /w/x.env
+docker run --rm -v "$PWD":/w sealref:0.2.4 check /w/x.env
+docker run --rm -v "$PWD":/w sealref:0.2.4 check --require-sealed /w/x.env
 ```
 
 ### A round trip through the image
 
 ```bash
-KEY=$(docker run --rm sealref:0.2.0 keygen --kid demo)
-REF=$(printf '%s' 'hunter2' | docker run --rm -i -e SEALREF_KEY="$KEY" sealref:0.2.0 seal)
-docker run --rm -e SEALREF_KEY="$KEY" sealref:0.2.0 unseal --ref "$REF" --newline
+KEY=$(docker run --rm sealref:0.2.4 keygen --kid demo)
+REF=$(printf '%s' 'hunter2' | docker run --rm -i -e SEALREF_KEY="$KEY" sealref:0.2.4 seal)
+docker run --rm -e SEALREF_KEY="$KEY" sealref:0.2.4 unseal --ref "$REF" --newline
 hunter2
 ```
 

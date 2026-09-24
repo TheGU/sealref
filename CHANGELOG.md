@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-24
+
 ### Added
 
 - `sealref protect <file>...` seals every plaintext secret in a dotenv file in place: the values
@@ -129,5 +131,6 @@ First release.
 - A `scratch` Docker image holding only the static musl binary, for `COPY --from=` into an
   application image.
 
+[0.2.4]: https://github.com/TheGU/sealref/releases/tag/v0.2.4
 [0.2.0]: https://github.com/TheGU/sealref/releases/tag/v0.2.0
 [0.1.0]: https://github.com/TheGU/sealref/releases/tag/v0.1.0
