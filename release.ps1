@@ -10,11 +10,9 @@
     makes a "Release vX.Y.Z" commit and an annotated tag. Nothing is pushed; the last line
     prints the push command, and the tag push is what starts the Release workflow.
 
-    Cargo.lock is refreshed with the toolchain named by rust-version in Cargo.toml, because that
-    is the strictest cargo CI runs: a newer cargo accepted a lock that 1.88 and the Docker build
-    refused. It uses a local rustup toolchain of that version when one is installed, a local
-    cargo of that version otherwise, and the rust:<version>-slim image through Docker when
-    neither is present.
+    Cargo.lock is refreshed with the local cargo when it is at least rust-version in Cargo.toml,
+    and with the rust:<rust-version>-slim image through Docker when cargo is missing or older.
+    This cargo only rewrites the lock; the shipped binaries are built by the Release workflow.
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
@@ -91,24 +89,14 @@ try {
     # --- Pick the cargo that refreshes Cargo.lock ---
 
     $cargo = $null
-    if (Get-Command cargo -ErrorAction SilentlyContinue) {
-        $pattern = '^' + [regex]::Escape($msrv) + '[.-]'
-        $toolchain = $null
-        if (Get-Command rustup -ErrorAction SilentlyContinue) {
-            # rustup lists "1.88.0-x86_64-pc-windows-msvc"; "+1.88" would name a different toolchain.
-            $toolchain = rustup toolchain list | Where-Object { $_ -match $pattern } |
-                Select-Object -First 1 | ForEach-Object { ($_ -split '\s+')[0] }
-        }
-        if ($toolchain) {
-            $cargo = @{ Exe = 'cargo'; Prefix = @("+$toolchain") }
-        }
-        elseif ((cargo --version) -match "^cargo $([regex]::Escape($msrv))\.") {
-            $cargo = @{ Exe = 'cargo'; Prefix = @() }
-        }
+    if ((Get-Command cargo -ErrorAction SilentlyContinue) -and
+        ((cargo --version) -match '^cargo (\d+\.\d+\.\d+)') -and
+        ([version]$Matches[1] -ge [version]$msrv)) {
+        $cargo = @{ Exe = 'cargo'; Prefix = @() }
     }
     if (-not $cargo) {
         if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-            throw "no local cargo $msrv and no docker to run rust:$msrv-slim"
+            throw "no local cargo $msrv or newer, and no docker to run rust:$msrv-slim"
         }
         $cargo = @{
             Exe    = 'docker'

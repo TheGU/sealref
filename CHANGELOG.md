@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Mozilla bundle was already the 1.x one and is still compiled in once.
 - A failure of the operating system random number generator is reported as such rather than
   aborting the process.
+- The minimum supported Rust version is now 1.98, up from 1.88. It follows the current stable
+  release rather than trailing it, so a build from source carries current compiler and standard
+  library security fixes.
 
 ### Fixed
 

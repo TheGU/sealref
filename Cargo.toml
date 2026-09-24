@@ -2,7 +2,7 @@
 name = "sealref"
 version = "0.2.3"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.98"
 description = "A tiny runtime secret-reference resolver for software that cannot natively use a secret manager"
 license = "MIT"
 repository = "https://github.com/TheGU/sealref"
