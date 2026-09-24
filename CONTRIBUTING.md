@@ -57,6 +57,14 @@ One logical change per pull request. Write the commit message so it explains why
 diff already says what. Update `CHANGELOG.md` under an `Unreleased` heading, and update the README
 when behaviour or configuration changes.
 
+## Releasing
+
+On an up-to-date, clean `main`, run `.\release.ps1 v1.2.3`. It moves the `Unreleased` changelog
+section under the new version, bumps the version in `Cargo.toml`, `Cargo.lock`, the README and the
+bug report template, and makes the release commit and tag. It pushes nothing; push with
+`git push --atomic origin main v1.2.3`, and the tag starts the Release workflow. It needs either a
+local cargo matching `rust-version` or Docker.
+
 ## Reporting a vulnerability
 
 Do not open a public issue. See [SECURITY.md](SECURITY.md).
