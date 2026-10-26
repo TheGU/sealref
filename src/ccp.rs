@@ -72,13 +72,12 @@ impl CcpConfig {
     /// Read one property of one account.
     pub fn read_field(&self, reference: &CcpRef) -> Result<Zeroizing<String>> {
         let response = http::agent()?.get(&self.request_url(reference)).call();
-        let response = match http::check(response) {
+        let mut response = match http::check(response) {
             Ok(response) => response,
-            Err(http::Failure::Status { code, response }) => {
+            Err(http::Failure::Status { code, mut response }) => {
                 // CyberArk's ErrorMsg echoes the application id, the safe and the requesting
                 // machine, so only the stable vendor error code is reported.
-                let vendor = response
-                    .into_string()
+                let vendor = http::read_text(&mut response)
                     .ok()
                     .and_then(|body| error_code(&body))
                     .map(|c| format!(" ({c})"))
@@ -98,10 +97,12 @@ impl CcpConfig {
                 )))
             }
         };
-        let body =
-            Zeroizing::new(response.into_string().map_err(|_| {
-                Error::Ccp(format!("unreadable response for {}", reference.locator()))
-            })?);
+        let body = http::read_text(&mut response).map_err(|reason| {
+            Error::Ccp(format!(
+                "unreadable response for {}: {reason}",
+                reference.locator()
+            ))
+        })?;
         extract_field(&body, &reference.field, &reference.locator())
     }
 }

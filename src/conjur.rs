@@ -116,12 +116,12 @@ impl ConjurConfig {
         let url = self.secret_url(&reference.id);
         let response = http::agent()?
             .get(&url)
-            .set(
+            .header(
                 "Authorization",
-                &Zeroizing::new(format!("Token token=\"{}\"", *token)),
+                Zeroizing::new(format!("Token token=\"{}\"", *token)).as_str(),
             )
             .call();
-        let response = match http::check(response) {
+        let mut response = match http::check(response) {
             Ok(response) => response,
             // Conjur answers 404 both for a variable that does not exist and for one the identity
             // is not permitted to read, on purpose, so the message must not claim either.
@@ -141,14 +141,15 @@ impl ConjurConfig {
                 )))
             }
         };
-        // The body IS the secret. `into_string` fails on invalid UTF-8 without quoting the bytes,
-        // and no arm below may include the body or its length.
-        let value = Zeroizing::new(response.into_string().map_err(|_| {
+        // The body IS the secret. `read_text` refuses invalid UTF-8 and a response that may have
+        // been cut short, and gives back a reason that quotes neither the bytes nor their length;
+        // no arm below may include the body or its length either.
+        let value = http::read_text(&mut response).map_err(|reason| {
             Error::Conjur(format!(
-                "{}: the value is not valid UTF-8",
+                "{}: the value could not be read: {reason}",
                 reference.locator()
             ))
-        })?);
+        })?;
         // A 200 with no body would otherwise resolve to an empty string and start the application
         // with an empty password, which is the one outcome a tool that fails closed must not have.
         if value.is_empty() {
@@ -177,10 +178,10 @@ impl ConjurConfig {
         let url = self.authenticate_url(login);
         let response = http::agent()?
             .post(&url)
-            .set("Accept-Encoding", "base64")
-            .set("Content-Type", "text/plain")
-            .send_string(key);
-        let response = match http::check(response) {
+            .header("Accept-Encoding", "base64")
+            .header("Content-Type", "text/plain")
+            .send(key);
+        let mut response = match http::check(response) {
             Ok(response) => response,
             Err(http::Failure::Status { code, .. }) => {
                 return Err(Error::Conjur(format!(
@@ -197,9 +198,11 @@ impl ConjurConfig {
             }
         };
         // The body is an access token, which is a credential: never quote it back.
-        let body = Zeroizing::new(response.into_string().map_err(|_| {
-            Error::Conjur(format!("the access token for {login} is not valid UTF-8"))
-        })?);
+        let body = http::read_text(&mut response).map_err(|reason| {
+            Error::Conjur(format!(
+                "the access token for {login} could not be read: {reason}"
+            ))
+        })?;
         normalise_token(&body, "the authenticate response")
     }
 }

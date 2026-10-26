@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- A `VAULT_TOKEN` or `VAULT_NAMESPACE` that cannot be sent as an HTTP header, such as a token
+  with a trailing newline from a mounted Kubernetes secret, no longer has its value printed in the
+  error. The previous HTTP client validated the header as the whole line `X-Vault-Token: <token>`
+  and quoted that line when it refused it, so the token reached stderr and from there a CI log. The
+  run still fails, and the value is not trimmed: a token that is not valid as given is better
+  reported than silently altered.
+
+### Fixed
+
+- A response with neither a `Content-Length` nor chunked framing is refused. Such a body ends only
+  when the connection closes, so a value cut short in transit is indistinguishable from a whole
+  one, and `ureq` 3 also accepts a reset, or a TLS close without `close_notify`, as that end. A
+  Conjur variable arriving that way could have resolved to a truncated password.
+- A Conjur value that is not valid UTF-8 now fails instead of resolving to a copy with the
+  offending bytes replaced, which was a different password with no sign that it was.
+- A `..` account name or login in a Conjur URL is escaped like a `..` path segment. The previous
+  HTTP client collapsed `..` itself before sending, so `CONJUR_ACCOUNT=..` addressed a different
+  path than the one written. Nothing between SealRef and the server collapses it now, but a server
+  or proxy might, hence the escape.
+
+### Changed
+
+- `ureq` moves to 3.5 and `base64` to 0.23, which `ureq` no longer holds back. The `ureq` 3 line
+  keeps the behaviour that matters here by setting it explicitly: redirects are still refused,
+  proxy variables (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`) are still never read, a 4xx or 5xx
+  still reports the vendor error code but not the body, and the timeouts are unchanged. `ureq`
+  3 would otherwise read the proxy variables, which would send an `http://` Vault token through
+  whatever proxy the image names. `webpki-roots` is no longer a direct dependency, because the
+  Mozilla bundle now comes through `ureq`. The dependency tree loses `url`, `idna`, `idna_adapter`,
+  the `icu_*` crates and their helpers (`yoke`, `zerovec`, `zerofrom`, `tinystr`, `litemap`,
+  `writeable`, `smallvec`, `displaydoc`, `form_urlencoded`, `utf8_iter`, `potential_utf`,
+  `stable_deref_trait`, `zerotrie`), the second `webpki-roots` and `synstructure`; it gains
+  `http`, `httparse`, `bytes`, `ureq-proto` and `utf8-zero`. The release binary is 2,216,864
+  bytes, down from 2,253,680.
+- The `User-Agent` is now `ureq/3.x` rather than `ureq/2.x`.
+- A hostname written with non-ASCII characters in `VAULT_ADDR`, `CONJUR_APPLIANCE_URL` or
+  `SEALREF_CCP_URL` is now rejected rather than converted to its ASCII form. Write the punycode
+  name instead.
+- Error text for a transport failure is chosen from a fixed list of what is safe to print, so a
+  future `ureq` release cannot add a message that quotes a URL.
+
 ## [0.2.4] - 2026-09-24
 
 ### Added
