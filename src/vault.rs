@@ -83,11 +83,13 @@ impl VaultConfig {
     /// Read one field of one KV v2 secret.
     pub fn read_field(&self, reference: &VaultRef) -> Result<Zeroizing<String>> {
         let url = self.data_url(&reference.mount, &reference.path);
-        let mut request = http::agent()?.get(&url).set("X-Vault-Token", &self.token);
+        let mut request = http::agent()?
+            .get(&url)
+            .header("X-Vault-Token", self.token.as_str());
         if let Some(namespace) = &self.namespace {
-            request = request.set("X-Vault-Namespace", namespace);
+            request = request.header("X-Vault-Namespace", namespace.as_str());
         }
-        let response = match http::check(request.call()) {
+        let mut response = match http::check(request.call()) {
             Ok(response) => response,
             // Vault error bodies name paths and policies, never the secret, but the safe habit is
             // to report the status and the locator and nothing else.
@@ -107,9 +109,12 @@ impl VaultConfig {
                 )))
             }
         };
-        let body = Zeroizing::new(response.into_string().map_err(|_| {
-            Error::Vault(format!("unreadable response for {}", reference.locator()))
-        })?);
+        let body = http::read_text(&mut response).map_err(|reason| {
+            Error::Vault(format!(
+                "unreadable response for {}: {reason}",
+                reference.locator()
+            ))
+        })?;
         extract_field(&body, &reference.field, &reference.locator())
     }
 }

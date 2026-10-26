@@ -30,8 +30,12 @@ struct Route {
     method: &'static str,
     target: &'static str,
     status: u16,
-    body: &'static str,
+    body: &'static [u8],
     content_type: &'static str,
+    /// Leave out `Content-Length`, so only the connection closing ends the body.
+    unframed: bool,
+    /// Declare more bytes in `Content-Length` than are sent, then close.
+    overstated: bool,
 }
 
 impl Route {
@@ -40,8 +44,10 @@ impl Route {
             method,
             target,
             status: 200,
-            body,
+            body: body.as_bytes(),
             content_type: "application/json",
+            unframed: false,
+            overstated: false,
         }
     }
 
@@ -50,13 +56,38 @@ impl Route {
             method,
             target,
             status: 200,
+            body: body.as_bytes(),
+            content_type: "text/plain",
+            unframed: false,
+            overstated: false,
+        }
+    }
+
+    /// A plain-text answer that is not necessarily UTF-8.
+    fn bytes(method: &'static str, target: &'static str, body: &'static [u8]) -> Self {
+        Route {
+            method,
+            target,
+            status: 200,
             body,
             content_type: "text/plain",
+            unframed: false,
+            overstated: false,
         }
     }
 
     fn status(mut self, status: u16) -> Self {
         self.status = status;
+        self
+    }
+
+    fn overstated(mut self) -> Self {
+        self.overstated = true;
+        self
+    }
+
+    fn unframed(mut self) -> Self {
+        self.unframed = true;
         self
     }
 }
@@ -135,20 +166,38 @@ fn respond(mut stream: TcpStream, routes: &[Route], request: &Recorded) {
     let matched = routes
         .iter()
         .find(|r| r.method == request.method && r.target == request.target);
-    let (status, content_type, body) = match matched {
-        Some(route) => (route.status, route.content_type, route.body),
-        None => (404, "application/json", r#"{"errors":["not found"]}"#),
+    let (status, content_type, body, unframed, overstated) = match matched {
+        Some(route) => (
+            route.status,
+            route.content_type,
+            route.body,
+            route.unframed,
+            route.overstated,
+        ),
+        None => (
+            404,
+            "application/json",
+            &br#"{"errors":["not found"]}"#[..],
+            false,
+            false,
+        ),
     };
-    let response = format!(
+    let length = if unframed {
+        String::new()
+    } else {
+        let declared = body.len() + if overstated { 64 } else { 0 };
+        format!("Content-Length: {declared}\r\n")
+    };
+    let head = format!(
         "HTTP/1.1 {status} X\r\n\
          Content-Type: {content_type}\r\n\
-         Content-Length: {}\r\n\
+         {length}\
          Location: http://127.0.0.1:1/moved\r\n\
          Connection: close\r\n\
-         \r\n{body}",
-        body.len()
+         \r\n"
     );
-    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
     let _ = stream.flush();
 }
 
@@ -402,6 +451,119 @@ fn conjur_never_echoes_the_response_body() {
         .failure()
         .stderr(predicate::str::contains("HTTP 500"))
         .stderr(predicate::str::contains("SECRET-BODY-THAT-MUST-NOT-BE-PRINTED").not());
+}
+
+#[test]
+fn conjur_refuses_a_value_that_is_not_valid_utf_8() {
+    // Bytes that are not UTF-8 must not be repaired into a different password, and must not be
+    // quoted back either.
+    let server = TestServer::start(vec![Route::bytes(
+        "GET",
+        "/secrets/myorg/variable/prod/db/password",
+        b"hunter\xff\xfe2",
+    )]);
+    sealref()
+        .env("CONJUR_APPLIANCE_URL", &server.address)
+        .env("CONJUR_ACCOUNT", "myorg")
+        .env("CONJUR_AUTHN_TOKEN", CONJUR_TOKEN_JSON)
+        .args(["resolve", "--ref", "seal:conjur:prod/db/password"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("UTF-8"))
+        .stderr(predicate::str::contains("hunter").not());
+}
+
+#[test]
+fn a_body_that_only_the_connection_closing_ends_is_refused() {
+    // A reset part-way through such a body looks the same as its end, so a truncated password
+    // would resolve. Only a response that announces its own length is trusted.
+    let server = TestServer::start(vec![Route::text(
+        "GET",
+        "/secrets/myorg/variable/prod/db/password",
+        "partial-secret",
+    )
+    .unframed()]);
+    sealref()
+        .env("CONJUR_APPLIANCE_URL", &server.address)
+        .env("CONJUR_ACCOUNT", "myorg")
+        .env("CONJUR_AUTHN_TOKEN", CONJUR_TOKEN_JSON)
+        .args(["resolve", "--ref", "seal:conjur:prod/db/password"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("cut short"))
+        .stderr(predicate::str::contains("partial-secret").not());
+}
+
+#[test]
+fn a_body_shorter_than_its_declared_length_is_refused() {
+    let server = TestServer::start(vec![Route::text(
+        "GET",
+        "/secrets/myorg/variable/prod/db/password",
+        "partial-secret",
+    )
+    .overstated()]);
+    sealref()
+        .env("CONJUR_APPLIANCE_URL", &server.address)
+        .env("CONJUR_ACCOUNT", "myorg")
+        .env("CONJUR_AUTHN_TOKEN", CONJUR_TOKEN_JSON)
+        .args(["resolve", "--ref", "seal:conjur:prod/db/password"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("partial-secret").not());
+}
+
+#[test]
+fn a_proxy_variable_is_ignored() {
+    // A proxy named by an image-wide variable would see an http:// Vault token in cleartext. The
+    // proxy here is a closed port, so a request that honoured the variable could not succeed.
+    let server = TestServer::start(vec![Route::json("GET", "/v1/secret/data/app", VAULT_BODY)]);
+    sealref()
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("http_proxy", "http://127.0.0.1:1")
+        .env("ALL_PROXY", "http://127.0.0.1:1")
+        .env("all_proxy", "http://127.0.0.1:1")
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .env("VAULT_ADDR", &server.address)
+        .env("VAULT_TOKEN", "s.testtoken")
+        .args(["resolve", "--ref", "seal:vault:secret/app#password"])
+        .assert()
+        .success()
+        .stdout("hunter2");
+}
+
+#[test]
+fn a_vault_token_that_cannot_be_sent_is_never_printed() {
+    // A trailing newline, as a mounted Kubernetes secret often has, makes the header invalid. The
+    // run must fail, and the failure must not quote the token it rejected.
+    let server = TestServer::start(vec![Route::json("GET", "/v1/secret/data/app", VAULT_BODY)]);
+    sealref()
+        .env("VAULT_ADDR", &server.address)
+        .env("VAULT_TOKEN", "s.leaktest-token-body\n")
+        .args(["resolve", "--ref", "seal:vault:secret/app#password"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("leaktest").not());
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_vault_namespace_that_cannot_be_sent_is_never_printed() {
+    let server = TestServer::start(vec![Route::json("GET", "/v1/secret/data/app", VAULT_BODY)]);
+    sealref()
+        .env("VAULT_ADDR", &server.address)
+        .env("VAULT_TOKEN", "s.testtoken")
+        .env("VAULT_NAMESPACE", "team-leaktest\n")
+        .args(["resolve", "--ref", "seal:vault:secret/app#password"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("leaktest").not());
+    assert!(server.requests().is_empty());
 }
 
 #[test]
