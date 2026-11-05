@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "sealref"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "argon2",
  "assert_cmd",
