@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-05
+
 ### Security
 
 - A `VAULT_TOKEN` or `VAULT_NAMESPACE` that cannot be sent as an HTTP header, such as a token
@@ -174,6 +176,7 @@ First release.
 - A `scratch` Docker image holding only the static musl binary, for `COPY --from=` into an
   application image.
 
+[0.2.5]: https://github.com/TheGU/sealref/releases/tag/v0.2.5
 [0.2.4]: https://github.com/TheGU/sealref/releases/tag/v0.2.4
 [0.2.0]: https://github.com/TheGU/sealref/releases/tag/v0.2.0
 [0.1.0]: https://github.com/TheGU/sealref/releases/tag/v0.1.0
