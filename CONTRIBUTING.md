@@ -33,6 +33,12 @@ The test suite needs no network, no live Vault and no live CyberArk. `tests/prov
 local HTTP server and asserts on the request that actually goes out, which is where a new provider
 belongs.
 
+Run CI locally before you push. `scripts/ci-local.sh [<commit>]` runs the Linux jobs of both
+workflows with [act](https://github.com/nektos/act) and Docker, on a fresh LF checkout of the
+commit, the way GitHub runs them on a pull request. To make every push do it, run
+`git config core.hooksPath .githooks` once in your clone: the pre-push hook then refuses a push
+whose branch fails. The Windows jobs run only on GitHub.
+
 ## What review will ask about
 
 - **No secret in any output.** Not in an error message, not in a `Debug` impl, not in a panic.

@@ -13,7 +13,8 @@ This file adds only what an agent needs on top of it.
 SealRef runs on the newest stable release of everything it depends on: the Rust toolchain
 (`rust-version` in `Cargo.toml` is the current stable, not an older floor), the Rust edition,
 every crate, the GitHub Actions in the workflows and the Docker base image. Pre-releases are not
-taken.
+taken. CI fails when the `Dockerfile` builds with a Rust version other than `rust-version`, and
+the weekly Audit run fails once a newer stable Rust is out.
 
 The test suite is the contract with the previous release. An update that passes it is taken. An
 update that makes a test fail has changed behaviour, and whether that ships as a breaking change,
@@ -46,6 +47,12 @@ cargo audit
 
 CI also tests on Windows, builds with `rust-version` and builds the `scratch` image from the
 [Dockerfile](Dockerfile). Report the output you saw, not a summary of it.
+
+Before any push, CI runs locally. Enable the gate once per clone with
+`git config core.hooksPath .githooks`: the pre-push hook runs
+[scripts/ci-local.sh](scripts/ci-local.sh), which runs the Linux jobs of both workflows with `act`
+on the commit being pushed, and refuses the push if one fails. Never bypass it with
+`git push --no-verify`. A refused push is a failing check: fix the cause, or report it.
 
 Without a working native toolchain, commit first, then run the checks in a
 `rust:<rust-version>-slim` container on an export of the commit, written outside the repository:
