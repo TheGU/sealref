@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use argon2::{Algorithm, Argon2, Params, Version};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -609,9 +609,11 @@ mod tests {
         let key = ring.get("k1").unwrap();
         let fingerprint = key.fingerprint();
         assert_eq!(fingerprint.len(), 16);
-        assert!(fingerprint
-            .chars()
-            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        assert!(
+            fingerprint
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        );
         let key_hex: String = key.bytes().iter().map(|b| format!("{b:02x}")).collect();
         assert!(!key_hex.contains(&fingerprint));
     }

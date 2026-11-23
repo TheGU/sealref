@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The minimum supported Rust version is now 1.100, up from 1.98, following the current stable
   release. The scratch image on GHCR is built with the same compiler, so it carries the compiler
   and standard library fixes released since 1.98.
+- The crate moves to the 2024 edition. Nothing changes for users; building from source already
+  needs a compiler that supports it.
 - Dependencies take their semver-compatible updates, among them `ureq` 3.5.2,
   `rustls-pki-types` 1.16.0 and `rustls-webpki` 0.103.17. Through `rustls-pki-types`, a TLS server
   name whose last label is a hex number, such as `0x7f000001`, is now refused, and a trailing dot

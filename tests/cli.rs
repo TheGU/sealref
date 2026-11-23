@@ -151,9 +151,11 @@ fn seal_uses_the_first_keyring_line_by_default() {
         .get_output()
         .stdout
         .clone();
-    assert!(String::from_utf8(sealed)
-        .unwrap()
-        .starts_with("seal:v1:k1:"));
+    assert!(
+        String::from_utf8(sealed)
+            .unwrap()
+            .starts_with("seal:v1:k1:")
+    );
 }
 
 #[test]

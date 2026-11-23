@@ -94,7 +94,7 @@ impl CcpConfig {
                     "cannot reach {} for {}: {reason}",
                     self.url,
                     reference.locator()
-                )))
+                )));
             }
         };
         let body = http::read_text(&mut response).map_err(|reason| {

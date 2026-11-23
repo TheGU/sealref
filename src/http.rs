@@ -26,13 +26,13 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use rustls::RootCertStore;
 use rustls::crypto::CryptoProvider;
 use rustls::sign::CertifiedKey;
-use rustls::RootCertStore;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
-use ureq::tls::{Certificate, ClientCert, PrivateKey, RootCerts, TlsConfig};
 use ureq::Body;
+use ureq::tls::{Certificate, ClientCert, PrivateKey, RootCerts, TlsConfig};
 use zeroize::Zeroizing;
 
 use crate::{Error, Result};
@@ -217,12 +217,12 @@ fn client_identity() -> Result<Option<Identity>> {
         (Some(_), None) => {
             return Err(Error::Tls(format!(
                 "{CLIENT_CERT_VAR} is set but {CLIENT_KEY_VAR} is not"
-            )))
+            )));
         }
         (None, Some(_)) => {
             return Err(Error::Tls(format!(
                 "{CLIENT_KEY_VAR} is set but {CLIENT_CERT_VAR} is not"
-            )))
+            )));
         }
     };
 
@@ -376,7 +376,7 @@ pub fn read_text(
 
 /// Whether the end of the body is announced by the message rather than by the connection closing.
 fn has_framing(response: &ureq::http::Response<Body>) -> bool {
-    use ureq::http::{header, StatusCode};
+    use ureq::http::{StatusCode, header};
     // These statuses have no body by definition, so there is nothing to cut short.
     if matches!(
         response.status(),
@@ -500,8 +500,8 @@ mod tests {
 
     #[test]
     fn an_unusable_client_key_is_an_error_not_a_later_panic() {
-        use base64::engine::general_purpose::STANDARD;
         use base64::Engine;
+        use base64::engine::general_purpose::STANDARD;
         let der = vec![0u8; 16];
         let pem = format!(
             "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",

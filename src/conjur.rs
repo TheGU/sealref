@@ -12,8 +12,8 @@
 
 use std::fs;
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use zeroize::Zeroizing;
 
 use crate::http;
@@ -131,14 +131,14 @@ impl ConjurConfig {
                     self.url,
                     reference.locator(),
                     http::redirect_note(code)
-                )))
+                )));
             }
             Err(http::Failure::Transport(reason)) => {
                 return Err(Error::Conjur(format!(
                     "cannot reach {} for {}: {reason}",
                     self.url,
                     reference.locator()
-                )))
+                )));
             }
         };
         // The body IS the secret. `read_text` refuses invalid UTF-8 and a response that may have
@@ -188,13 +188,13 @@ impl ConjurConfig {
                     "{} returned HTTP {code} authenticating {login}{}",
                     self.url,
                     http::redirect_note(code)
-                )))
+                )));
             }
             Err(http::Failure::Transport(reason)) => {
                 return Err(Error::Conjur(format!(
                     "cannot reach {} to authenticate {login}: {reason}",
                     self.url
-                )))
+                )));
             }
         };
         // The body is an access token, which is a credential: never quote it back.

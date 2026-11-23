@@ -1,7 +1,7 @@
 [package]
 name = "sealref"
 version = "0.2.5"
-edition = "2021"
+edition = "2024"
 rust-version = "1.100"
 description = "A tiny runtime secret-reference resolver for software that cannot natively use a secret manager"
 license = "MIT"

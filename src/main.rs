@@ -4,18 +4,18 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::{Parser, Subcommand};
 use zeroize::Zeroizing;
 
 use sealref::check::Checker;
-use sealref::exec::{split_template_spec, ExecOptions};
+use sealref::exec::{ExecOptions, split_template_spec};
 use sealref::info::Info;
 use sealref::protect::Protector;
 use sealref::reference::Reference;
 use sealref::resolve::Resolver;
-use sealref::{crypto, keyring, template, utc_date_stamp, Error, Result};
+use sealref::{Error, Result, crypto, keyring, template, utc_date_stamp};
 
 #[derive(Parser)]
 #[command(

@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 
 use crate::reference::{self, Reference};
 use crate::resolve::Resolver;
-use crate::{dotenv, keyring, template, Error, Result};
+use crate::{Error, Result, dotenv, keyring, template};
 
 /// What to run and what to give it.
 #[derive(Debug, Default, Clone)]
