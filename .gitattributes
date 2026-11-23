@@ -1,0 +1,4 @@
+# These run under bash or in a Linux container, where a CRLF checkout breaks them.
+*.sh text eol=lf
+.githooks/* text eol=lf
+.github/act/Dockerfile text eol=lf

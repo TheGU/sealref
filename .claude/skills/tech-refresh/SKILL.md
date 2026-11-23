@@ -58,9 +58,9 @@ step, so a failure points at one update.
    git grep -n '<old-version>' -- . ':!CHANGELOG.md' ':!Cargo.lock'
    ```
 
-   That is `rust-version` in `Cargo.toml`, `FROM rust:<version>-alpine` in the `Dockerfile` (the
-   compiler that builds the GHCR image), and the version named in `CONTRIBUTING.md` and the README
-   install section.
+   That is `rust-version` in `Cargo.toml` and `FROM rust:<version>-alpine` in the `Dockerfile`
+   (the compiler that builds the GHCR image). CI fails when those two disagree, and the Audit
+   workflow fails when `rust-version` is behind stable, which is usually what starts a refresh.
 3. **Rust edition, when a newer one exists.** `cargo fix --edition --all-targets` on the old
    edition, then set `edition` in `Cargo.toml`, then `cargo fmt`, whose style follows the edition.
    One commit for all three.
@@ -127,6 +127,9 @@ way that looks like a real error. Mount a named volume at `/usr/local/cargo/regi
 `CARGO_TARGET_DIR` to another volume, so each run is not a cold build. A step that rewrites
 sources in the container, such as `cargo fix --edition`, comes back as a patch: extract a second
 copy, diff the two, and apply the patch to the index with `git apply --cached`.
+
+Last, push. The pre-push hook (AGENTS.md) runs the CI jobs locally with `act` and refuses the push
+if one fails. That is the gate; the commands above are for finding a failure fast.
 
 ## 5. Pull request
 
