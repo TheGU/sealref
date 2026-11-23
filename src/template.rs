@@ -195,7 +195,7 @@ pub fn read_text(path: &std::path::Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reference::{format_v1, MIN_BLOB_LEN};
+    use crate::reference::{MIN_BLOB_LEN, format_v1};
 
     fn sample() -> String {
         format_v1("k1", &[3u8; MIN_BLOB_LEN])
@@ -222,7 +222,9 @@ mod tests {
     #[test]
     fn renders_multiple_references_and_leaves_other_text_alone() {
         let token = sample();
-        let text = format!("[db]\nuser = app\npassword = {{{{{token}}}}}\ntoken = {{{{ seal:vault:secret/x#f }}}}\n# {{{{ not-a-reference }}}}\n");
+        let text = format!(
+            "[db]\nuser = app\npassword = {{{{{token}}}}}\ntoken = {{{{ seal:vault:secret/x#f }}}}\n# {{{{ not-a-reference }}}}\n"
+        );
         let text = text.as_str();
         let rendered = render(text, |r, _| match r {
             Reference::V1(_) => Ok(Zeroizing::new("first".to_string())),

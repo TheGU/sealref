@@ -9,7 +9,7 @@ use std::path::Path;
 use regex_lite::Regex;
 
 use crate::reference::Reference;
-use crate::{dotenv, reference, template, Error, Result};
+use crate::{Error, Result, dotenv, reference, template};
 
 /// Variable-name patterns that must not hold plaintext under `--require-sealed`.
 pub const DEFAULT_PATTERNS: &[&str] = &[
@@ -65,11 +65,7 @@ impl Report {
 
     /// The process exit code: 0 when everything passed, 2 when anything failed.
     pub fn exit_code(&self) -> i32 {
-        if self.failed() {
-            2
-        } else {
-            0
-        }
+        if self.failed() { 2 } else { 0 }
     }
 }
 
@@ -187,7 +183,7 @@ impl Checker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reference::{format_v1, MIN_BLOB_LEN};
+    use crate::reference::{MIN_BLOB_LEN, format_v1};
 
     fn checker(require_sealed: bool) -> Checker {
         Checker::new(require_sealed, &[]).unwrap()
@@ -238,9 +234,11 @@ mod tests {
     fn a_bad_reference_fails_even_without_require_sealed() {
         let finding = checker(false).check_value("DB_PASSWORD", "seal:v1:k1:!!!");
         assert!(finding.failed);
-        assert!(finding
-            .line
-            .starts_with("FAIL DB_PASSWORD invalid reference"));
+        assert!(
+            finding
+                .line
+                .starts_with("FAIL DB_PASSWORD invalid reference")
+        );
     }
 
     #[test]

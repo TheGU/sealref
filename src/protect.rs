@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 
 use crate::check::Checker;
 use crate::reference::{self, Reference};
-use crate::{dotenv, template, Error, Result};
+use crate::{Error, Result, dotenv, template};
 
 /// One rewritten dotenv file.
 pub struct Protected {
@@ -100,7 +100,7 @@ impl Protector {
                 _ => {
                     return Err(at_entry(Error::Msg(
                         "sealing did not produce a seal:v1 reference".to_string(),
-                    )))
+                    )));
                 }
             };
             out.push_str(&text[cursor..entry.value_span.start]);

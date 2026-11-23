@@ -279,12 +279,14 @@ fn vault_sends_the_namespace_header_when_one_is_set() {
 
 #[test]
 fn vault_reports_a_status_without_the_response_body() {
-    let server = TestServer::start(vec![Route::json(
-        "GET",
-        "/v1/secret/data/app",
-        r#"{"errors":["1 error occurred: permission denied for policy team-a"]}"#,
-    )
-    .status(403)]);
+    let server = TestServer::start(vec![
+        Route::json(
+            "GET",
+            "/v1/secret/data/app",
+            r#"{"errors":["1 error occurred: permission denied for policy team-a"]}"#,
+        )
+        .status(403),
+    ]);
     sealref()
         .env("VAULT_ADDR", &server.address)
         .env("VAULT_TOKEN", "s.testtoken")
@@ -301,7 +303,7 @@ fn vault_reports_a_status_without_the_response_body() {
 fn a_redirect_is_refused_rather_than_followed() {
     // Following one would resend the vendor token to whatever host the redirect named.
     let server = TestServer::start(vec![
-        Route::json("GET", "/v1/secret/data/app", "{}").status(302)
+        Route::json("GET", "/v1/secret/data/app", "{}").status(302),
     ]);
     sealref()
         .env("VAULT_ADDR", &server.address)
@@ -436,12 +438,14 @@ fn ccp_reports_the_error_code_but_not_the_error_message() {
 fn conjur_never_echoes_the_response_body() {
     // A Conjur read returns the secret AS the response body, so an error handler that quotes a
     // body is a direct disclosure. This route fails, but with a body shaped like a secret.
-    let server = TestServer::start(vec![Route::text(
-        "GET",
-        "/secrets/myorg/variable/prod/db/password",
-        "SECRET-BODY-THAT-MUST-NOT-BE-PRINTED",
-    )
-    .status(500)]);
+    let server = TestServer::start(vec![
+        Route::text(
+            "GET",
+            "/secrets/myorg/variable/prod/db/password",
+            "SECRET-BODY-THAT-MUST-NOT-BE-PRINTED",
+        )
+        .status(500),
+    ]);
     sealref()
         .env("CONJUR_APPLIANCE_URL", &server.address)
         .env("CONJUR_ACCOUNT", "myorg")
@@ -478,12 +482,14 @@ fn conjur_refuses_a_value_that_is_not_valid_utf_8() {
 fn a_body_that_only_the_connection_closing_ends_is_refused() {
     // A reset part-way through such a body looks the same as its end, so a truncated password
     // would resolve. Only a response that announces its own length is trusted.
-    let server = TestServer::start(vec![Route::text(
-        "GET",
-        "/secrets/myorg/variable/prod/db/password",
-        "partial-secret",
-    )
-    .unframed()]);
+    let server = TestServer::start(vec![
+        Route::text(
+            "GET",
+            "/secrets/myorg/variable/prod/db/password",
+            "partial-secret",
+        )
+        .unframed(),
+    ]);
     sealref()
         .env("CONJUR_APPLIANCE_URL", &server.address)
         .env("CONJUR_ACCOUNT", "myorg")
@@ -498,12 +504,14 @@ fn a_body_that_only_the_connection_closing_ends_is_refused() {
 
 #[test]
 fn a_body_shorter_than_its_declared_length_is_refused() {
-    let server = TestServer::start(vec![Route::text(
-        "GET",
-        "/secrets/myorg/variable/prod/db/password",
-        "partial-secret",
-    )
-    .overstated()]);
+    let server = TestServer::start(vec![
+        Route::text(
+            "GET",
+            "/secrets/myorg/variable/prod/db/password",
+            "partial-secret",
+        )
+        .overstated(),
+    ]);
     sealref()
         .env("CONJUR_APPLIANCE_URL", &server.address)
         .env("CONJUR_ACCOUNT", "myorg")

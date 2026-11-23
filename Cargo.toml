@@ -1,12 +1,11 @@
 [package]
 name = "sealref"
 version = "0.2.5"
-edition = "2021"
-rust-version = "1.98"
+edition = "2024"
+rust-version = "1.100"
 description = "A tiny runtime secret-reference resolver for software that cannot natively use a secret manager"
 license = "MIT"
 repository = "https://github.com/TheGU/sealref"
-homepage = "https://github.com/TheGU/sealref"
 readme = "README.md"
 keywords = ["secrets", "vault", "conjur", "cyberark", "dotenv"]
 categories = ["command-line-utilities"]

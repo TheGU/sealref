@@ -25,7 +25,7 @@ cargo fmt --check
 ```
 
 All three must pass; CI runs them on Linux and Windows, and also builds the `scratch` image. The
-minimum supported Rust version is 1.98 and is checked in CI. It follows the current stable release
+minimum supported Rust version is 1.100 and is checked in CI. It follows the current stable release
 rather than trailing it: this is a security tool, and a fixed compiler or standard library
 vulnerability should reach every build of it.
 

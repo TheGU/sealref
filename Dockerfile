@@ -5,7 +5,7 @@
 # certificates are compiled into the binary, which is what lets the Vault provider work from a
 # scratch image.
 
-FROM rust:1.98-alpine AS build
+FROM rust:1.100-alpine AS build
 
 RUN apk add --no-cache musl-dev
 

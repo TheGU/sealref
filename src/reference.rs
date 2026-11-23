@@ -12,8 +12,8 @@
 //! Anything else that starts with `seal:` is an error. Anything that does not start with `seal:`
 //! is not a reference at all and passes through untouched.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use crate::{Error, Result};
 
@@ -500,9 +500,11 @@ mod tests {
 
     #[test]
     fn knows_which_references_need_the_network() {
-        assert!(!Reference::parse(&format_v1("k1", &[0u8; MIN_BLOB_LEN]))
-            .unwrap()
-            .is_remote());
+        assert!(
+            !Reference::parse(&format_v1("k1", &[0u8; MIN_BLOB_LEN]))
+                .unwrap()
+                .is_remote()
+        );
         for remote in [
             "seal:vault:secret/app#password",
             "seal:conjur:prod/db/password",

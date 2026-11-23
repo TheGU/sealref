@@ -99,14 +99,14 @@ impl VaultConfig {
                     self.addr,
                     reference.locator(),
                     http::redirect_note(code)
-                )))
+                )));
             }
             Err(http::Failure::Transport(reason)) => {
                 return Err(Error::Vault(format!(
                     "cannot reach {} for {}: {reason}",
                     self.addr,
                     reference.locator()
-                )))
+                )));
             }
         };
         let body = http::read_text(&mut response).map_err(|reason| {
