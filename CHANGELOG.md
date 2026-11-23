@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-23
+
 ### Changed
 
 - The minimum supported Rust version is now 1.100, up from 1.98, following the current stable
@@ -188,6 +190,7 @@ First release.
 - A `scratch` Docker image holding only the static musl binary, for `COPY --from=` into an
   application image.
 
+[0.2.6]: https://github.com/TheGU/sealref/releases/tag/v0.2.6
 [0.2.5]: https://github.com/TheGU/sealref/releases/tag/v0.2.5
 [0.2.4]: https://github.com/TheGU/sealref/releases/tag/v0.2.4
 [0.2.0]: https://github.com/TheGU/sealref/releases/tag/v0.2.0
