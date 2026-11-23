@@ -40,7 +40,7 @@ modify take part in the secret management you already have.
 
 ## Install
 
-From source, with Rust 1.100 or newer:
+From source, with the current stable Rust:
 
 ```bash
 cargo build --release
