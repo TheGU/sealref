@@ -38,6 +38,16 @@ jobs:
       - name: Read the MSRV from Cargo.toml
         id: msrv
         run: echo "version=$(grep '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - name: Check that the Dockerfile builds with the same version
+        env:
+          MSRV: ${{ steps.msrv.outputs.version }}
+        run: |
+          image=$(sed -n 's/^FROM rust:\([^ ]*\)-alpine .*/\1/p' Dockerfile)
+          if [ "$image" != "$MSRV" ]; then
+            echo "::error file=Dockerfile::The Dockerfile builds with rust:${image:-<none>}-alpine but rust-version in Cargo.toml is $MSRV. Change its FROM line to rust:$MSRV-alpine."
+            exit 1
+          fi
+          echo "Dockerfile and Cargo.toml both use Rust $MSRV"
       - name: Install the toolchain
         run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal
       - name: Build with the declared minimum

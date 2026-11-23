@@ -2,7 +2,8 @@ name: Audit
 
 # A new advisory against a dependency does not wait for someone to push, so this also runs on a
 # schedule. It fails on a vulnerability; an "unmaintained crate" notice is reported but does not
-# turn the build red, because that is a thing to plan around rather than an outage.
+# turn the build red, because that is a thing to plan around rather than an outage. A new stable
+# Rust release does not wait for a push either, and rust-version has to follow it.
 on:
   push:
     paths: ["**/Cargo.toml", "**/Cargo.lock", ".github/workflows/audit.yml"]
@@ -24,3 +25,19 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Audit the dependency tree
         run: cargo audit
+
+  rust-current:
+    name: rust-version is the current stable Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compare rust-version with the current stable release
+        run: |
+          rustup toolchain install stable --profile minimal
+          stable=$(rustc +stable --version | cut -d' ' -f2 | cut -d. -f1,2)
+          msrv=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2 | cut -d. -f1,2)
+          if [ "$msrv" != "$stable" ]; then
+            echo "::error file=Cargo.toml::rust-version is $msrv but the current stable Rust is $stable. Raise rust-version in Cargo.toml and the Dockerfile's FROM rust:<version>-alpine to $stable, as the tech-refresh skill describes."
+            exit 1
+          fi
+          echo "rust-version $msrv is the current stable Rust"

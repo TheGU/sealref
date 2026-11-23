@@ -25,9 +25,10 @@ cargo fmt --check
 ```
 
 All three must pass; CI runs them on Linux and Windows, and also builds the `scratch` image. The
-minimum supported Rust version is 1.100 and is checked in CI. It follows the current stable release
-rather than trailing it: this is a security tool, and a fixed compiler or standard library
-vulnerability should reach every build of it.
+minimum supported Rust version is `rust-version` in `Cargo.toml`, and it is the current stable
+release rather than trailing it: this is a security tool, and a fixed compiler or standard library
+vulnerability should reach every build of it. CI fails when the `Dockerfile` builds with a
+different version, and the weekly audit fails once a newer stable release is out.
 
 The test suite needs no network, no live Vault and no live CyberArk. `tests/providers.rs` starts a
 local HTTP server and asserts on the request that actually goes out, which is where a new provider
